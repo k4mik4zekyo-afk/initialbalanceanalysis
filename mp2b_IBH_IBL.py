@@ -16,6 +16,16 @@ from typing import Iterable, Iterator, List, Optional
 
 
 DATE_FORMAT = "%m/%d/%y %H:%M"
+# For quick VS Code runs, adjust the DEFAULTS below and run the script directly.
+DEFAULTS = {
+    "rth_start": time(6, 30),
+    "rth_end": time(13, 0),
+    "ib_start": time(6, 30),
+    "ib_end": time(7, 30),
+    "opening_window_minutes": 5,
+    "start_date": date(2025, 10, 1),
+    "end_date": date(2026, 1, 15),
+}
 
 
 @dataclass
@@ -322,41 +332,43 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--rth-start",
         type=parse_time,
-        default=time(6, 30),
+        default=DEFAULTS["rth_start"],
         help="Regular Trading Hours start time (HH:MM, 24h).",
     )
     parser.add_argument(
         "--rth-end",
         type=parse_time,
-        default=time(16, 0),
+        default=DEFAULTS["rth_end"],
         help="Regular Trading Hours end time (HH:MM, 24h).",
     )
     parser.add_argument(
         "--ib-start",
         type=parse_time,
-        default=time(6, 30),
+        default=DEFAULTS["ib_start"],
         help="Initial balance start time (HH:MM, 24h).",
     )
     parser.add_argument(
         "--ib-end",
         type=parse_time,
-        default=time(7, 30),
+        default=DEFAULTS["ib_end"],
         help="Initial balance end time (HH:MM, 24h).",
     )
     parser.add_argument(
         "--opening-window-minutes",
         type=int,
-        default=30,
+        default=DEFAULTS["opening_window_minutes"],
         help="Opening range window length in minutes from RTH start.",
     )
     parser.add_argument(
         "--start-date",
         type=parse_date,
+        default=DEFAULTS["start_date"],
         help="Optional start date (YYYY-MM-DD) to filter sessions.",
     )
     parser.add_argument(
         "--end-date",
         type=parse_date,
+        default=DEFAULTS["end_date"],
         help="Optional end date (YYYY-MM-DD) to filter sessions.",
     )
     parser.add_argument(
