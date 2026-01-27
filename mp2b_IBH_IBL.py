@@ -22,7 +22,7 @@ DEFAULTS = {
     "rth_end": time(13, 0),
     "ib_start": time(6, 30),
     "ib_end": time(7, 30),
-    "opening_window_minutes": 5,
+    "opening_window_minutes": 10,
     "start_date": date(2025, 10, 1),
     "end_date": date(2026, 1, 15),
 }
@@ -47,12 +47,12 @@ class DayMetrics:
     ib_low: float
     ib_range: float
     midpoint: float
-    balance_state: str
     ib_volume: float
     total_volume: float
     relative_ib_volume: float
     rth_high: float
     rth_low: float
+    rth_close: float
     extension_up: float
     extension_down: float
     extension_1_5_up: float
@@ -145,8 +145,6 @@ def compute_day_metrics(
     rth_low = min(bar.low for bar in rth_bars)
     rth_close = rth_bars[-1].close
 
-    balance_state = "balance" if rth_high <= ib_high and rth_low >= ib_low else "discovery"
-
     extension_up = max(0.0, rth_high - ib_high)
     extension_down = max(0.0, ib_low - rth_low)
 
@@ -209,8 +207,8 @@ def compute_day_metrics(
         else:
             opening_direction = "flat"
         drive_threshold = 0.6 * opening_range
-        drive_close_high = closing_location >= 0.8
-        drive_close_low = closing_location <= 0.2
+        drive_close_high = closing_location >= 1.05
+        drive_close_low = closing_location <= 0.05
         is_drive = abs(opening_move) >= drive_threshold and (drive_close_high or drive_close_low)
         opening_type = "drive" if is_drive else "auction"
     else:
@@ -238,12 +236,12 @@ def compute_day_metrics(
         ib_low=ib_low,
         ib_range=ib_range,
         midpoint=midpoint,
-        balance_state=balance_state,
         ib_volume=ib_volume,
         total_volume=total_volume,
         relative_ib_volume=relative_ib_volume,
         rth_high=rth_high,
         rth_low=rth_low,
+        rth_close=rth_close,
         extension_up=extension_up,
         extension_down=extension_down,
         extension_1_5_up=extension_1_5_up,
