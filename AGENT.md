@@ -48,3 +48,9 @@ For each trading day, calculate and track:
 - Results should be organized by day
 - Each day should have all metrics clearly labeled
 - Consider a DataFrame or structured output for analysis
+
+## Testing Workflow
+- After code changes, always smoke test the code
+- Capture all stdout/stderr output to `test-results.log`.
+- Upload logs as GitHub Action artifact named `test-logs-${{ github.run_id }}.log`.
+- If tests fail, comment full log in PR and set status to pending.[web:11][web:23]
