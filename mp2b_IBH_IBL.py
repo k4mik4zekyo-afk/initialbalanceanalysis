@@ -11,7 +11,7 @@ import argparse
 import csv
 import sys
 from dataclasses import dataclass
-from datetime import datetime, date, time
+from datetime import datetime, date, time, timedelta
 from typing import Iterable, Iterator, List, Optional
 
 
@@ -21,6 +21,7 @@ DATE_FORMAT = "%m/%d/%y %H:%M"
 @dataclass
 class Bar:
     timestamp: datetime
+    open: float
     high: float
     low: float
     close: float
@@ -30,6 +31,8 @@ class Bar:
 @dataclass
 class DayMetrics:
     session_date: date
+    rth_start: str
+    rth_end: str
     ib_high: float
     ib_low: float
     ib_range: float
@@ -38,8 +41,8 @@ class DayMetrics:
     ib_volume: float
     total_volume: float
     relative_ib_volume: float
-    day_high: float
-    day_low: float
+    rth_high: float
+    rth_low: float
     extension_up: float
     extension_down: float
     extension_1_5_up: float
@@ -52,6 +55,17 @@ class DayMetrics:
     reached_2_down: bool
     rotation: bool
     failed_auction: str
+    opening_window_minutes: int
+    opening_range_high: Optional[float]
+    opening_range_low: Optional[float]
+    opening_range: Optional[float]
+    opening_range_close: Optional[float]
+    opening_direction: Optional[str]
+    opening_type: Optional[str]
+    opening_bar_open: Optional[float]
+    opening_bar_close: Optional[float]
+    opening_bar_open_close: Optional[float]
+    opening_bar_volume: Optional[float]
 
 
 def parse_time(value: str) -> time:
@@ -82,6 +96,7 @@ def iter_bars(csv_path: str) -> Iterator[Bar]:
             timestamp = datetime.strptime(raw_dt.strip(), DATE_FORMAT)
             yield Bar(
                 timestamp=timestamp,
+                open=float(row["Open"]),
                 high=float(row["High"]),
                 low=float(row["Low"]),
                 close=float(row["Close"]),
@@ -91,10 +106,19 @@ def iter_bars(csv_path: str) -> Iterator[Bar]:
 
 def compute_day_metrics(
     bars: List[Bar],
+    rth_start: time,
+    rth_end: time,
     ib_start: time,
     ib_end: time,
+    opening_window_minutes: int,
 ) -> Optional[DayMetrics]:
-    ib_bars = [bar for bar in bars if ib_start <= bar.timestamp.time() <= ib_end]
+    rth_bars = [
+        bar for bar in bars if rth_start <= bar.timestamp.time() <= rth_end
+    ]
+    if not rth_bars:
+        return None
+
+    ib_bars = [bar for bar in rth_bars if ib_start <= bar.timestamp.time() <= ib_end]
     if not ib_bars:
         return None
 
@@ -104,35 +128,35 @@ def compute_day_metrics(
     midpoint = (ib_high + ib_low) / 2
 
     ib_volume = sum(bar.volume for bar in ib_bars)
-    total_volume = sum(bar.volume for bar in bars)
+    total_volume = sum(bar.volume for bar in rth_bars)
     relative_ib_volume = ib_volume / total_volume if total_volume else 0.0
 
-    day_high = max(bar.high for bar in bars)
-    day_low = min(bar.low for bar in bars)
-    day_close = bars[-1].close
+    rth_high = max(bar.high for bar in rth_bars)
+    rth_low = min(bar.low for bar in rth_bars)
+    rth_close = rth_bars[-1].close
 
-    balance_state = "balance" if day_high <= ib_high and day_low >= ib_low else "discovery"
+    balance_state = "balance" if rth_high <= ib_high and rth_low >= ib_low else "discovery"
 
-    extension_up = max(0.0, day_high - ib_high)
-    extension_down = max(0.0, ib_low - day_low)
+    extension_up = max(0.0, rth_high - ib_high)
+    extension_down = max(0.0, ib_low - rth_low)
 
     extension_1_5_up = ib_high + 1.5 * ib_range
     extension_2_up = ib_high + 2.0 * ib_range
     extension_1_5_down = ib_low - 1.5 * ib_range
     extension_2_down = ib_low - 2.0 * ib_range
 
-    reached_1_5_up = day_high >= extension_1_5_up
-    reached_2_up = day_high >= extension_2_up
-    reached_1_5_down = day_low <= extension_1_5_down
-    reached_2_down = day_low <= extension_2_down
+    reached_1_5_up = rth_high >= extension_1_5_up
+    reached_2_up = rth_high >= extension_2_up
+    reached_1_5_down = rth_low <= extension_1_5_down
+    reached_2_down = rth_low <= extension_2_down
 
-    after_ib = [bar for bar in bars if bar.timestamp.time() > ib_end]
+    after_ib = [bar for bar in rth_bars if bar.timestamp.time() > ib_end]
     touched_high = any(bar.high >= ib_high for bar in after_ib)
     touched_low = any(bar.low <= ib_low for bar in after_ib)
     rotation = touched_high and touched_low
 
-    failed_high = day_high > ib_high and day_close <= ib_high
-    failed_low = day_low < ib_low and day_close >= ib_low
+    failed_high = rth_high > ib_high and rth_close <= ib_high
+    failed_low = rth_low < ib_low and rth_close >= ib_low
     if failed_high and failed_low:
         failed_auction = "failed_both"
     elif failed_high:
@@ -142,8 +166,64 @@ def compute_day_metrics(
     else:
         failed_auction = "none"
 
+    opening_bar = next(
+        (bar for bar in rth_bars if bar.timestamp.time() == rth_start),
+        None,
+    )
+    opening_start_dt = datetime.combine(rth_bars[0].timestamp.date(), rth_start)
+    opening_end_dt = opening_start_dt + timedelta(minutes=opening_window_minutes)
+    opening_window_bars = [
+        bar
+        for bar in rth_bars
+        if opening_start_dt <= bar.timestamp < opening_end_dt
+    ]
+
+    if opening_window_bars:
+        opening_high = max(bar.high for bar in opening_window_bars)
+        opening_low = min(bar.low for bar in opening_window_bars)
+        opening_range = opening_high - opening_low
+        opening_close = opening_window_bars[-1].close
+        opening_move = (
+            opening_close - opening_window_bars[0].open
+            if opening_window_bars
+            else 0.0
+        )
+        if opening_range:
+            closing_location = (opening_close - opening_low) / opening_range
+        else:
+            closing_location = 0.5
+        if opening_move > 0:
+            opening_direction = "up"
+        elif opening_move < 0:
+            opening_direction = "down"
+        else:
+            opening_direction = "flat"
+        drive_threshold = 0.6 * opening_range
+        drive_close_high = closing_location >= 0.8
+        drive_close_low = closing_location <= 0.2
+        is_drive = abs(opening_move) >= drive_threshold and (drive_close_high or drive_close_low)
+        opening_type = "drive" if is_drive else "auction"
+    else:
+        opening_high = None
+        opening_low = None
+        opening_range = None
+        opening_close = None
+        opening_direction = None
+        opening_type = None
+
+    opening_bar_open = opening_bar.open if opening_bar else None
+    opening_bar_close = opening_bar.close if opening_bar else None
+    opening_bar_open_close = (
+        opening_bar_close - opening_bar_open
+        if opening_bar_open is not None and opening_bar_close is not None
+        else None
+    )
+    opening_bar_volume = opening_bar.volume if opening_bar else None
+
     return DayMetrics(
-        session_date=bars[0].timestamp.date(),
+        session_date=rth_bars[0].timestamp.date(),
+        rth_start=rth_start.isoformat(timespec="minutes"),
+        rth_end=rth_end.isoformat(timespec="minutes"),
         ib_high=ib_high,
         ib_low=ib_low,
         ib_range=ib_range,
@@ -152,8 +232,8 @@ def compute_day_metrics(
         ib_volume=ib_volume,
         total_volume=total_volume,
         relative_ib_volume=relative_ib_volume,
-        day_high=day_high,
-        day_low=day_low,
+        rth_high=rth_high,
+        rth_low=rth_low,
         extension_up=extension_up,
         extension_down=extension_down,
         extension_1_5_up=extension_1_5_up,
@@ -166,6 +246,17 @@ def compute_day_metrics(
         reached_2_down=reached_2_down,
         rotation=rotation,
         failed_auction=failed_auction,
+        opening_window_minutes=opening_window_minutes,
+        opening_range_high=opening_high,
+        opening_range_low=opening_low,
+        opening_range=opening_range,
+        opening_range_close=opening_close,
+        opening_direction=opening_direction,
+        opening_type=opening_type,
+        opening_bar_open=opening_bar_open,
+        opening_bar_close=opening_bar_close,
+        opening_bar_open_close=opening_bar_open_close,
+        opening_bar_volume=opening_bar_volume,
     )
 
 
@@ -229,16 +320,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to the MNQ minute data CSV.",
     )
     parser.add_argument(
+        "--rth-start",
+        type=parse_time,
+        default=time(6, 30),
+        help="Regular Trading Hours start time (HH:MM, 24h).",
+    )
+    parser.add_argument(
+        "--rth-end",
+        type=parse_time,
+        default=time(16, 0),
+        help="Regular Trading Hours end time (HH:MM, 24h).",
+    )
+    parser.add_argument(
         "--ib-start",
         type=parse_time,
-        default=time(9, 30),
+        default=time(6, 30),
         help="Initial balance start time (HH:MM, 24h).",
     )
     parser.add_argument(
         "--ib-end",
         type=parse_time,
-        default=time(10, 30),
+        default=time(7, 30),
         help="Initial balance end time (HH:MM, 24h).",
+    )
+    parser.add_argument(
+        "--opening-window-minutes",
+        type=int,
+        default=30,
+        help="Opening range window length in minutes from RTH start.",
     )
     parser.add_argument(
         "--start-date",
@@ -261,8 +370,14 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
+    if args.rth_end <= args.rth_start:
+        raise SystemExit("RTH end time must be after RTH start time.")
     if args.ib_end <= args.ib_start:
         raise SystemExit("IB end time must be after IB start time.")
+    if args.ib_start < args.rth_start or args.ib_end > args.rth_end:
+        raise SystemExit("IB window must fall within the RTH window.")
+    if args.opening_window_minutes <= 0:
+        raise SystemExit("Opening window minutes must be a positive integer.")
 
     metrics: List[DayMetrics] = []
     for bars in day_grouped_bars(
@@ -270,7 +385,14 @@ def main() -> None:
         start_date=args.start_date,
         end_date=args.end_date,
     ):
-        day_metric = compute_day_metrics(bars, args.ib_start, args.ib_end)
+        day_metric = compute_day_metrics(
+            bars,
+            args.rth_start,
+            args.rth_end,
+            args.ib_start,
+            args.ib_end,
+            args.opening_window_minutes,
+        )
         if day_metric:
             metrics.append(day_metric)
 
