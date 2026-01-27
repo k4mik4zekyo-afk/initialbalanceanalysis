@@ -23,7 +23,7 @@ Refactor the code to calculate IBH/IBL for a **user-defined period** (not hardco
 
 ### Daily Calculations Required
 
-For each trading day, calculate and track:
+For RTH, defined as 6:30 AM to 4:00 PM, calculate and track:
 
 1. **Balance vs Discovery**
    - Did we stay within Initial Balance or enter Discovery?
@@ -43,6 +43,11 @@ For each trading day, calculate and track:
 4. **Market Structure**
    - Rotation: Did price rotate between IBH and IBL?
    - Failed Auction: Did we have a failed auction for that day?
+  
+5. **Opening Range Behavior**
+   - Based on the one minute candle at 6:30am what is the Open-Close
+   - Based on the one minute candle at 6:30am what is the Volume
+   - Is this a 'Drive' or 'Auction' Opening type?
 
 ### Output Format
 - Results should be organized by day
