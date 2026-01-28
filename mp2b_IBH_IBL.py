@@ -65,6 +65,7 @@ class DayMetrics:
     reached_2_down: bool
     rotation: bool
     failed_auction: str
+    breakside: str
     opening_window_minutes: int
     opening_range_high: Optional[float]
     opening_range_low: Optional[float]
@@ -163,6 +164,20 @@ def compute_day_metrics(
     touched_low = any(bar.low <= ib_low for bar in after_ib)
     rotation = touched_high and touched_low
 
+    breakside = "none"
+    for bar in after_ib:
+        hit_high = bar.high >= ib_high
+        hit_low = bar.low <= ib_low
+        if hit_high and hit_low:
+            breakside = "both"
+            break
+        if hit_high:
+            breakside = "high"
+            break
+        if hit_low:
+            breakside = "low"
+            break
+
     failed_high = rth_high > ib_high and rth_close <= ib_high
     failed_low = rth_low < ib_low and rth_close >= ib_low
     if failed_high and failed_low:
@@ -254,6 +269,7 @@ def compute_day_metrics(
         reached_2_down=reached_2_down,
         rotation=rotation,
         failed_auction=failed_auction,
+        breakside=breakside,
         opening_window_minutes=opening_window_minutes,
         opening_range_high=opening_high,
         opening_range_low=opening_low,
