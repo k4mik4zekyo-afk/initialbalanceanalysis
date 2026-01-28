@@ -23,7 +23,7 @@ DEFAULTS = {
     "ib_start": time(6, 30),
     "ib_end": time(7, 30),
     "opening_window_minutes": 10,
-    "start_date": date(2025, 10, 1),
+    "start_date": date(2025, 1, 15),
     "end_date": date(2026, 1, 15),
 }
 
