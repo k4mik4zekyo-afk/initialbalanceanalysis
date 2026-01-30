@@ -341,13 +341,13 @@ def add_interactions(
         updates["balance_day"] = not (discovery_up or discovery_down)
 
     if ib_range is None or ib_range == 0 or extension_up is None:
-        updates["rotation_depth_up"] = None
+        updates["extension_up_normib"] = None
     else:
-        updates["rotation_depth_up"] = extension_up / ib_range
+        updates["extension_up_normib"] = extension_up / ib_range
     if ib_range is None or ib_range == 0 or extension_down is None:
-        updates["rotation_depth_down"] = None
+        updates["extension_down_normib"] = None
     else:
-        updates["rotation_depth_down"] = extension_down / ib_range
+        updates["extension_down_normib"] = extension_down / ib_range
 
     nearest_name, nearest_distance = nearest_level_to_open(opening_midpoint, prior_levels)
     updates["nearest_prior_level_to_open"] = nearest_name
@@ -500,8 +500,8 @@ def main() -> None:
         "discovery_up",
         "discovery_down",
         "balance_day",
-        "rotation_depth_up",
-        "rotation_depth_down",
+        "extension_up_normib",
+        "extension_down_normib",
         "nearest_prior_level_to_open",
         "nearest_prior_level_to_open_distance",
     ]

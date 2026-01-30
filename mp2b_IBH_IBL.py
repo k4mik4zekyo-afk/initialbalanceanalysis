@@ -66,6 +66,8 @@ class DayMetrics:
     rotation: bool
     failed_auction: str
     breakside: str
+    breakside_rotation_up: Optional[float]
+    breakside_rotation_down: Optional[float]
     opening_window_minutes: int
     opening_range_high: Optional[float]
     opening_range_low: Optional[float]
@@ -189,6 +191,36 @@ def compute_day_metrics(
     else:
         failed_auction = "none"
 
+    breakside_rotation_up = None
+    if failed_high:
+        first_high_idx = next(
+            (
+                idx
+                for idx, bar in enumerate(after_ib)
+                if bar.high >= ib_high
+            ),
+            None,
+        )
+        if first_high_idx is not None:
+            breakside_rotation_up = min(
+                bar.low for bar in after_ib[first_high_idx:]
+            )
+
+    breakside_rotation_down = None
+    if failed_low:
+        first_low_idx = next(
+            (
+                idx
+                for idx, bar in enumerate(after_ib)
+                if bar.low <= ib_low
+            ),
+            None,
+        )
+        if first_low_idx is not None:
+            breakside_rotation_down = max(
+                bar.high for bar in after_ib[first_low_idx:]
+            )
+
     opening_bar = next(
         (bar for bar in rth_bars if bar.timestamp.time() == rth_start),
         None,
@@ -270,6 +302,8 @@ def compute_day_metrics(
         rotation=rotation,
         failed_auction=failed_auction,
         breakside=breakside,
+        breakside_rotation_up=breakside_rotation_up,
+        breakside_rotation_down=breakside_rotation_down,
         opening_window_minutes=opening_window_minutes,
         opening_range_high=opening_high,
         opening_range_low=opening_low,

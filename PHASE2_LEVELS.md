@@ -101,13 +101,13 @@ Additional convenience aliases:
 - **balance_day**: `True` when *neither* discovery condition is met; `False` if
   any discovery occurs; `None` if discovery inputs are missing.【F:mp2a_previous_day_levels.py†L361-L366】
 
-## Rotation Depth Columns
+## Normalized Extension Columns
 
-Rotation depth normalizes extension magnitude by the IB range:
+Normalized extensions scale the raw IB extensions by the IB range:
 
-- **rotation_depth_up**: `extension_up / ib_range` when both values exist and
+- **extension_up_normib**: `extension_up / ib_range` when both values exist and
   `ib_range != 0`; otherwise `None`.【F:mp2a_previous_day_levels.py†L367-L373】
-- **rotation_depth_down**: `extension_down / ib_range` when both values exist and
+- **extension_down_normib**: `extension_down / ib_range` when both values exist and
   `ib_range != 0`; otherwise `None`.【F:mp2a_previous_day_levels.py†L373-L377】
 
 ## Nearest Prior Level to the Open

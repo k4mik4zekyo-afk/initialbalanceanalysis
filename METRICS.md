@@ -72,6 +72,18 @@ Uses RTH extreme and close vs. IB levels:
   - `"failed_low"` if only `failed_low`
   - `"none"` otherwise
 
+### Breakside Rotation Depth (Failed Auction Follow-Through)
+
+These fields capture the post-breakside rotation *after* a failed auction is
+confirmed (using the failed auction logic above).
+
+- **breakside_rotation_up**: When `failed_high` is `True`, find the first
+  post-IB bar that touches `ib_high` (`high >= ib_high`). From that bar forward,
+  record the **lowest low** seen. Otherwise `None`.
+- **breakside_rotation_down**: When `failed_low` is `True`, find the first
+  post-IB bar that touches `ib_low` (`low <= ib_low`). From that bar forward,
+  record the **highest high** seen. Otherwise `None`.
+
 ### Breakside (First IB Touch After IB Window)
 
 Scan `after_ib` bars in time order and stop at the first touch:
