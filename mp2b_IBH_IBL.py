@@ -421,6 +421,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--output",
+        type=str,
+        default="./outputs/ib_metrics.csv",
         help="Optional output CSV path. If omitted, prints CSV to stdout.",
     )
     return parser
