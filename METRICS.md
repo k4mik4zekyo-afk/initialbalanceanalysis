@@ -37,21 +37,6 @@ Computed from all RTH bars where `rth_start <= bar.time <= rth_end`.
 - **rth_low**: Minimum `low` over RTH bars.
 - **rth_close**: `close` of the last RTH bar.
 
-### Discovery Extensions
-
-Using RTH high/low and IB range:
-
-- **extension_up**: `max(0, rth_high - ib_high)`
-- **extension_down**: `max(0, ib_low - rth_low)`
-- **extension_1_5_up**: `ib_high + 1.5 * ib_range`
-- **extension_2_up**: `ib_high + 2.0 * ib_range`
-- **extension_1_5_down**: `ib_low - 1.5 * ib_range`
-- **extension_2_down**: `ib_low - 2.0 * ib_range`
-- **reached_1_5_up**: `rth_high >= extension_1_5_up`
-- **reached_2_up**: `rth_high >= extension_2_up`
-- **reached_1_5_down**: `rth_low <= extension_1_5_down`
-- **reached_2_down**: `rth_low <= extension_2_down`
-
 ### Rotation
 
 Rotation means price touched **both** IBH and IBL **after** the IB window ends.
@@ -71,6 +56,31 @@ Uses RTH extreme and close vs. IB levels:
   - `"failed_high"` if only `failed_high`
   - `"failed_low"` if only `failed_low`
   - `"none"` otherwise
+
+### Breakside Rotation Depth (Failed Auction Follow-Through)
+
+These fields capture the post-breakside rotation *after* a failed auction is
+confirmed (using the failed auction logic above).
+
+- **breakside_rotation_up**: When `failed_high` is `True`, find the first
+  post-IB bar that touches `ib_high` (`high >= ib_high`). From that bar forward,
+  record the **lowest low** seen. Otherwise `None`.
+- **breakside_rotation_down**: When `failed_low` is `True`, find the first
+  post-IB bar that touches `ib_low` (`low <= ib_low`). From that bar forward,
+  record the **highest high** seen. Otherwise `None`.
+
+### Breakside Retracement
+
+These fields capture how far price retraces after the breakside is determined,
+measured from the breakside IB level to the most extreme reversal after the
+first breakside touch.
+
+- **breakside_retracement_points**:
+  - If breakside is `"high"`: `ib_high - lowest_low_after_break`.
+  - If breakside is `"low"`: `highest_high_after_break - ib_low`.
+  - `None` if breakside is `"both"` or `"none"`.
+- **breakside_retracement_normib**: `breakside_retracement_points / ib_range`
+  when `ib_range` is non-zero; otherwise `None`.
 
 ### Breakside (First IB Touch After IB Window)
 
