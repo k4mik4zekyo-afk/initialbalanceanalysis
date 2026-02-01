@@ -21,10 +21,10 @@ DEFAULTS = {
     "ib_metrics": "outputs/ib_metrics.csv",
     "output": "outputs/phase2_previous_day_levels.csv",
     "session_start": time(6, 30),
-    "session_end": time(16, 0),
+    "session_end": time(14, 0),
     "tick_size": 0.25,
     "value_area_pct": 0.7,
-    "level_tolerance": 0.25,
+    "level_tolerance": 10.0,
 }
 
 
@@ -223,12 +223,6 @@ def breach_below(low: Optional[float], level: Optional[float], tol: float) -> Op
     return low < level - tol
 
 
-def confluence(level_a: Optional[float], level_b: Optional[float], tol: float) -> Optional[bool]:
-    if level_a is None or level_b is None:
-        return None
-    return abs(level_a - level_b) <= tol
-
-
 def nearest_level_to_open(
     opening_midpoint: Optional[float], prior_levels: Dict[str, Optional[float]]
 ) -> Tuple[Optional[str], Optional[float]]:
@@ -275,8 +269,6 @@ def add_interactions(
     opening_high = parse_float(ib_row.get("opening_range_high"))
     opening_low = parse_float(ib_row.get("opening_range_low"))
     opening_close = parse_float(ib_row.get("opening_range_close"))
-    extension_up = parse_float(ib_row.get("extension_up"))
-    extension_down = parse_float(ib_row.get("extension_down"))
 
     opening_midpoint = None
     if opening_high is not None and opening_low is not None:
@@ -319,13 +311,6 @@ def add_interactions(
         updates[f"opening_close_vs_{level_name}"] = classify_relation(
             opening_close, level_value, tolerance
         )
-        updates[f"confluence_{level_name}_ibh"] = confluence(level_value, ib_high, tolerance)
-        updates[f"confluence_{level_name}_ibl"] = confluence(level_value, ib_low, tolerance)
-
-    updates["confluence_vah_ibh"] = confluence(prior_levels["vah"], ib_high, tolerance)
-    updates["confluence_val_ibl"] = confluence(prior_levels["val"], ib_low, tolerance)
-    updates["confluence_pdl_val"] = confluence(prior_levels["pdl"], prior_levels["val"], tolerance)
-    updates["confluence_pdh_vah"] = confluence(prior_levels["pdh"], prior_levels["vah"], tolerance)
 
     updates["discovery_up"] = (
         rth_high is not None and ib_high is not None and rth_high > ib_high
@@ -339,6 +324,13 @@ def add_interactions(
         updates["balance_day"] = None
     else:
         updates["balance_day"] = not (discovery_up or discovery_down)
+
+    extension_up = None
+    if ib_high is not None and rth_high is not None:
+        extension_up = max(0.0, rth_high - ib_high)
+    extension_down = None
+    if ib_low is not None and rth_low is not None:
+        extension_down = max(0.0, ib_low - rth_low)
 
     if ib_range is None or ib_range == 0 or extension_up is None:
         updates["extension_up_normib"] = None
@@ -483,20 +475,6 @@ def main() -> None:
         "opening_close_vs_vah",
         "opening_close_vs_val",
         "opening_close_vs_poc",
-        "confluence_pdh_ibh",
-        "confluence_pdh_ibl",
-        "confluence_pdl_ibh",
-        "confluence_pdl_ibl",
-        "confluence_vah_ibh",
-        "confluence_vah_ibl",
-        "confluence_val_ibh",
-        "confluence_val_ibl",
-        "confluence_poc_ibh",
-        "confluence_poc_ibl",
-        "confluence_val_ibl",
-        "confluence_vah_ibh",
-        "confluence_pdl_val",
-        "confluence_pdh_vah",
         "discovery_up",
         "discovery_down",
         "balance_day",

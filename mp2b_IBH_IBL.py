@@ -53,21 +53,13 @@ class DayMetrics:
     rth_high: float
     rth_low: float
     rth_close: float
-    extension_up: float
-    extension_down: float
-    extension_1_5_up: float
-    extension_2_up: float
-    extension_1_5_down: float
-    extension_2_down: float
-    reached_1_5_up: bool
-    reached_2_up: bool
-    reached_1_5_down: bool
-    reached_2_down: bool
     rotation: bool
     failed_auction: str
     breakside: str
     breakside_rotation_up: Optional[float]
     breakside_rotation_down: Optional[float]
+    breakside_retracement_points: Optional[float]
+    breakside_retracement_normib: Optional[float]
     opening_window_minutes: int
     opening_range_high: Optional[float]
     opening_range_low: Optional[float]
@@ -148,19 +140,6 @@ def compute_day_metrics(
     rth_low = min(bar.low for bar in rth_bars)
     rth_close = rth_bars[-1].close
 
-    extension_up = max(0.0, rth_high - ib_high)
-    extension_down = max(0.0, ib_low - rth_low)
-
-    extension_1_5_up = ib_high + 1.5 * ib_range
-    extension_2_up = ib_high + 2.0 * ib_range
-    extension_1_5_down = ib_low - 1.5 * ib_range
-    extension_2_down = ib_low - 2.0 * ib_range
-
-    reached_1_5_up = rth_high >= extension_1_5_up
-    reached_2_up = rth_high >= extension_2_up
-    reached_1_5_down = rth_low <= extension_1_5_down
-    reached_2_down = rth_low <= extension_2_down
-
     after_ib = [bar for bar in rth_bars if bar.timestamp.time() > ib_end]
     touched_high = any(bar.high >= ib_high for bar in after_ib)
     touched_low = any(bar.low <= ib_low for bar in after_ib)
@@ -220,6 +199,35 @@ def compute_day_metrics(
             breakside_rotation_down = max(
                 bar.high for bar in after_ib[first_low_idx:]
             )
+
+    breakside_retracement_points = None
+    breakside_retracement_normib = None
+    if breakside in {"high", "low"} and after_ib:
+        first_break_idx = next(
+            (
+                idx
+                for idx, bar in enumerate(after_ib)
+                if (
+                    breakside == "high"
+                    and bar.high >= ib_high
+                    or breakside == "low"
+                    and bar.low <= ib_low
+                )
+            ),
+            None,
+        )
+        if first_break_idx is not None:
+            post_break = after_ib[first_break_idx:]
+            if breakside == "high":
+                lowest_low = min(bar.low for bar in post_break)
+                breakside_retracement_points = ib_high - lowest_low
+            else:
+                highest_high = max(bar.high for bar in post_break)
+                breakside_retracement_points = highest_high - ib_low
+            if ib_range:
+                breakside_retracement_normib = (
+                    breakside_retracement_points / ib_range
+                )
 
     opening_bar = next(
         (bar for bar in rth_bars if bar.timestamp.time() == rth_start),
@@ -289,21 +297,13 @@ def compute_day_metrics(
         rth_high=rth_high,
         rth_low=rth_low,
         rth_close=rth_close,
-        extension_up=extension_up,
-        extension_down=extension_down,
-        extension_1_5_up=extension_1_5_up,
-        extension_2_up=extension_2_up,
-        extension_1_5_down=extension_1_5_down,
-        extension_2_down=extension_2_down,
-        reached_1_5_up=reached_1_5_up,
-        reached_2_up=reached_2_up,
-        reached_1_5_down=reached_1_5_down,
-        reached_2_down=reached_2_down,
         rotation=rotation,
         failed_auction=failed_auction,
         breakside=breakside,
         breakside_rotation_up=breakside_rotation_up,
         breakside_rotation_down=breakside_rotation_down,
+        breakside_retracement_points=breakside_retracement_points,
+        breakside_retracement_normib=breakside_retracement_normib,
         opening_window_minutes=opening_window_minutes,
         opening_range_high=opening_high,
         opening_range_low=opening_low,

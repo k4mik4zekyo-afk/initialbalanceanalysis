@@ -76,22 +76,6 @@ Columns:
 
 Valid `{level}` suffixes: `pdh`, `pdl`, `vah`, `val`, `poc`.
 
-## Confluence Columns
-
-Definition: `True` when the absolute distance between two levels is within the
-configured tolerance: `abs(level_a - level_b) <= tol`.【F:mp2a_previous_day_levels.py†L201-L236】
-
-- **confluence_{level}_ibh**: Prior-day `{level}` aligns with `ib_high`.
-- **confluence_{level}_ibl**: Prior-day `{level}` aligns with `ib_low`.
-
-Valid `{level}` suffixes: `pdh`, `pdl`, `vah`, `val`, `poc`.【F:mp2a_previous_day_levels.py†L265-L347】
-
-Additional convenience aliases:
-- **confluence_vah_ibh**: Same as `confluence_vah_ibh` (explicitly re-set).
-- **confluence_val_ibl**: Same as `confluence_val_ibl` (explicitly re-set).
-- **confluence_pdl_val**: Confluence between `prev_pdl` and `prev_val`.
-- **confluence_pdh_vah**: Confluence between `prev_pdh` and `prev_vah`.【F:mp2a_previous_day_levels.py†L328-L353】
-
 ## Discovery / Balance Columns
 
 - **discovery_up**: `True` when `rth_high > ib_high`; `False` otherwise. (If
