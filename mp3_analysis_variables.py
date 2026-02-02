@@ -27,7 +27,6 @@ DATE_FORMAT = "%m/%d/%y %H:%M"
 
 DEFAULTS = {
     "csv": "MNQ_1min_2023Jan_2026Jan.csv",
-    "target_date": date(2026, 1, 15),
     "rth_start": time(6, 30),
     "rth_end": time(13, 0),
     "ib_start": time(6, 30),
@@ -149,6 +148,33 @@ def collect_two_sessions(
 
     # Last two session dates up to and including target_date
     return by_date[dates[-2]], by_date[dates[-1]]
+
+
+def collect_last_two_sessions(
+    bars: Iterable[Bar],
+    rth_start: time = DEFAULTS["rth_start"],
+    rth_end: time = DEFAULTS["rth_end"],
+) -> Tuple[List[Bar], List[Bar]]:
+    """Return bars for the last two full session dates in the file.
+
+    A date only counts as a valid session if it contains at least one bar
+    within the RTH window, so partial/overnight-only days are skipped.
+    """
+    by_date: Dict[date, List[Bar]] = {}
+    for bar in bars:
+        by_date.setdefault(bar.timestamp.date(), []).append(bar)
+
+    # Keep only dates that have RTH-eligible bars
+    valid_dates = sorted(
+        d for d, day_bars in by_date.items()
+        if any(rth_start <= b.timestamp.time() <= rth_end for b in day_bars)
+    )
+    if not valid_dates:
+        return [], []
+    if len(valid_dates) < 2:
+        return [], by_date[valid_dates[-1]]
+
+    return by_date[valid_dates[-2]], by_date[valid_dates[-1]]
 
 
 # ---------------------------------------------------------------------------
@@ -387,8 +413,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--target-date",
         type=parse_date,
-        default=DEFAULTS["target_date"],
-        help="Session date to compute features for (YYYY-MM-DD).",
+        default=None,
+        help=(
+            "Session date to compute features for (YYYY-MM-DD). "
+            "Omit to auto-detect the last two sessions in the CSV."
+        ),
     )
     parser.add_argument(
         "--rth-start",
@@ -463,13 +492,20 @@ def main() -> None:
     if not 0 < args.value_area_pct <= 1:
         raise SystemExit("Value area percent must be between 0 and 1.")
 
-    prev_bars, target_bars = collect_two_sessions(
-        iter_bars(args.csv), args.target_date
-    )
+    if args.target_date is not None:
+        prev_bars, target_bars = collect_two_sessions(
+            iter_bars(args.csv), args.target_date
+        )
+    else:
+        prev_bars, target_bars = collect_last_two_sessions(
+            iter_bars(args.csv), args.rth_start, args.rth_end
+        )
 
     if not target_bars:
         raise SystemExit(
-            f"No bars found for target date {args.target_date}."
+            "No bars found"
+            + (f" for target date {args.target_date}." if args.target_date else
+               " in the CSV.")
         )
     if not prev_bars:
         print(
