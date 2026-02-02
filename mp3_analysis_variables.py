@@ -26,6 +26,8 @@ from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 DATE_FORMAT = "%m/%d/%y %H:%M"
 
 DEFAULTS = {
+    "csv": "MNQ_1min_2023Jan_2026Jan.csv",
+    "target_date": date(2026, 1, 15),
     "rth_start": time(6, 30),
     "rth_end": time(13, 0),
     "ib_start": time(6, 30),
@@ -379,13 +381,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--csv",
-        default="MNQ_1min_2023Jan_2026Jan.csv",
+        default=DEFAULTS["csv"],
         help="Path to the MNQ minute data CSV.",
     )
     parser.add_argument(
         "--target-date",
         type=parse_date,
-        required=True,
+        default=DEFAULTS["target_date"],
         help="Session date to compute features for (YYYY-MM-DD).",
     )
     parser.add_argument(
