@@ -1,0 +1,47 @@
+============================================================
+  Decision Tree Feature Extraction & Prediction
+============================================================
+
+Model loaded: decision_tree_model.pkl
+Target session date: 2026-01-15
+
+Features:
+  relative_ib_volume: 0.3118319688572904
+  normalized_distance: 0.9284188034188035
+  opening_bar_open_close: -21.5
+  opening_bar_volume: 14873.0
+  prev_session_volume: 1787488.0
+
+============================================================
+  Prediction: No Rotation
+============================================================
+
+  Probabilities:
+    No Rotation: 0.9762
+    Rotation: 0.0238
+
+JSON output:
+{
+  "feature_names": [
+    "relative_ib_volume",
+    "normalized_distance",
+    "opening_bar_open_close",
+    "opening_bar_volume",
+    "prev_session_volume"
+  ],
+  "features": [
+    [
+      0.3118319688572904,
+      0.9284188034188035,
+      -21.5,
+      14873.0,
+      1787488.0
+    ]
+  ],
+  "prediction": "No Rotation",
+  "prediction_raw": false,
+  "probabilities": {
+    "Rotation": 0.023809523809523808,
+    "No Rotation": 0.9761904761904762
+  }
+}
