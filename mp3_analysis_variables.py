@@ -21,6 +21,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, date, time, timedelta
 from typing import Dict, Iterable, Iterator, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 
 DATE_FORMAT = "%m/%d/%y %H:%M"
@@ -82,22 +83,52 @@ def parse_date(value: str) -> date:
         ) from exc
 
 
-def iter_bars(csv_path: str) -> Iterator[Bar]:
+def _detect_csv_format(header_line: str) -> str:
+    """Return ``'tradingview'`` or ``'legacy'`` based on the CSV header."""
+    lower = header_line.lower().lstrip("\ufeff").strip()
+    if lower.startswith("time,"):
+        return "tradingview"
+    return "legacy"
+
+
+def iter_bars(csv_path: str, tz_name: str = "America/Chicago") -> Iterator[Bar]:
     with open(csv_path, newline="") as handle:
+        header = handle.readline()
+        handle.seek(0)
+        fmt = _detect_csv_format(header)
         reader = csv.DictReader(handle)
-        for row in reader:
-            raw_dt = row.get("DateTime") or row.get("\ufeffDateTime")
-            if not raw_dt:
-                continue
-            timestamp = datetime.strptime(raw_dt.strip(), DATE_FORMAT)
-            yield Bar(
-                timestamp=timestamp,
-                open=float(row["Open"]),
-                high=float(row["High"]),
-                low=float(row["Low"]),
-                close=float(row["Close"]),
-                volume=float(row.get("Volume(from bar)", 0) or 0),
-            )
+
+        if fmt == "tradingview":
+            target_tz = ZoneInfo(tz_name)
+            for row in reader:
+                raw_dt = row.get("time") or row.get("\ufefftime")
+                if not raw_dt:
+                    continue
+                aware_dt = datetime.fromisoformat(raw_dt.strip())
+                local_dt = aware_dt.astimezone(target_tz)
+                naive_dt = local_dt.replace(tzinfo=None)
+                yield Bar(
+                    timestamp=naive_dt,
+                    open=float(row["open"]),
+                    high=float(row["high"]),
+                    low=float(row["low"]),
+                    close=float(row["close"]),
+                    volume=float(row.get("Volume", 0) or 0),
+                )
+        else:
+            for row in reader:
+                raw_dt = row.get("DateTime") or row.get("\ufeffDateTime")
+                if not raw_dt:
+                    continue
+                timestamp = datetime.strptime(raw_dt.strip(), DATE_FORMAT)
+                yield Bar(
+                    timestamp=timestamp,
+                    open=float(row["Open"]),
+                    high=float(row["High"]),
+                    low=float(row["Low"]),
+                    close=float(row["Close"]),
+                    volume=float(row.get("Volume(from bar)", 0) or 0),
+                )
 
 
 def collect_two_days(
@@ -468,6 +499,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Value area percent for VAH/VAL (e.g. 0.7 for 70%%).",
     )
     parser.add_argument(
+        "--tz",
+        default="America/Chicago",
+        help=(
+            "IANA timezone for converting TradingView ISO timestamps "
+            "(default: America/Chicago).  Ignored for legacy CSVs."
+        ),
+    )
+    parser.add_argument(
         "--output",
         default=None,
         help="Optional output file path. Writes JSON. Omit to print to stdout.",
@@ -494,11 +533,11 @@ def main() -> None:
 
     if args.target_date is not None:
         prev_bars, target_bars = collect_two_sessions(
-            iter_bars(args.csv), args.target_date
+            iter_bars(args.csv, tz_name=args.tz), args.target_date
         )
     else:
         prev_bars, target_bars = collect_last_two_sessions(
-            iter_bars(args.csv), args.rth_start, args.rth_end
+            iter_bars(args.csv, tz_name=args.tz), args.rth_start, args.rth_end
         )
 
     if not target_bars:
