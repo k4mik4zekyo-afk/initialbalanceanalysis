@@ -91,7 +91,7 @@ def _detect_csv_format(header_line: str) -> str:
     return "legacy"
 
 
-def iter_bars(csv_path: str, tz_name: str = "America/Chicago") -> Iterator[Bar]:
+def iter_bars(csv_path: str, tz_name: str = "America/Los_Angeles") -> Iterator[Bar]:
     with open(csv_path, newline="") as handle:
         header = handle.readline()
         handle.seek(0)
@@ -500,10 +500,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--tz",
-        default="America/Chicago",
+        default="America/Los_Angeles",
         help=(
             "IANA timezone for converting TradingView ISO timestamps "
-            "(default: America/Chicago).  Ignored for legacy CSVs."
+            "(default: America/Los_Angeles).  Ignored for legacy CSVs."
         ),
     )
     parser.add_argument(
