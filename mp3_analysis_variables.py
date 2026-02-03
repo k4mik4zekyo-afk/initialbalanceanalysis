@@ -229,6 +229,7 @@ def compute_ib_features(
     rth_end: time,
     ib_start: time,
     ib_end: time,
+    opening_window_minutes: int = 15,
 ) -> Optional[Dict[str, Optional[float]]]:
     """Compute the Phase I features needed for the feature vector."""
     rth_bars = [
@@ -261,9 +262,9 @@ def compute_ib_features(
     )
     opening_bar_volume = opening_bar.volume if opening_bar else None
 
-    # Opening range midpoint (first 10 minutes, reuse mp2b logic)
+    # Opening range midpoint (reuse mp2b logic)
     opening_start_dt = datetime.combine(rth_bars[0].timestamp.date(), rth_start)
-    opening_end_dt = opening_start_dt + timedelta(minutes=10)
+    opening_end_dt = opening_start_dt + timedelta(minutes=opening_window_minutes)
     opening_window_bars = [
         bar for bar in rth_bars
         if opening_start_dt <= bar.timestamp < opening_end_dt
@@ -399,12 +400,13 @@ def build_feature_vector(
     session_end: time,
     tick_size: float,
     value_area_pct: float,
+    opening_window_minutes: int = 15,
 ) -> Optional[List[Optional[float]]]:
     """Build ``[relative_ib_volume, normalized_distance, opening_bar_open_close,
     opening_bar_volume, prev_session_volume]`` from two sessions of bars."""
 
     ib_feats = compute_ib_features(
-        target_bars, rth_start, rth_end, ib_start, ib_end
+        target_bars, rth_start, rth_end, ib_start, ib_end, opening_window_minutes
     )
     if ib_feats is None:
         return None
@@ -508,6 +510,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULTS["value_area_pct"],
         help="Value area percent for VAH/VAL (e.g. 0.7 for 70%%).",
+    )
+    parser.add_argument(
+        "--opening-window-minutes",
+        type=int,
+        default=15,
+        help="Opening range window length in minutes from RTH start (default: 15).",
     )
     parser.add_argument(
         "--tz",
@@ -614,6 +622,7 @@ def main() -> None:
             session_end=args.session_end,
             tick_size=args.tick_size,
             value_area_pct=args.value_area_pct,
+            opening_window_minutes=args.opening_window_minutes,
         )
 
         if features is None:
