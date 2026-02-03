@@ -225,13 +225,13 @@ def compute_ib_features(
 ) -> Optional[Dict[str, Optional[float]]]:
     """Compute the Phase I features needed for the feature vector."""
     rth_bars = [
-        bar for bar in bars if rth_start <= bar.timestamp.time() <= rth_end
+        bar for bar in bars if rth_start <= bar.timestamp.time() < rth_end
     ]
     if not rth_bars:
         return None
 
     ib_bars = [
-        bar for bar in rth_bars if ib_start <= bar.timestamp.time() <= ib_end
+        bar for bar in rth_bars if ib_start <= bar.timestamp.time() < ib_end
     ]
     if not ib_bars:
         return None
@@ -343,7 +343,7 @@ def compute_prior_session(
     """Compute prior-day levels and session volume from the previous session bars."""
     session_bars = [
         bar for bar in bars
-        if session_start <= bar.timestamp.time() <= session_end
+        if session_start <= bar.timestamp.time() < session_end
     ]
     if not session_bars:
         return None

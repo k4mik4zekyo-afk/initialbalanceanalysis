@@ -96,7 +96,7 @@ def iter_bars(csv_path: str) -> Iterable[Bar]:
 
 def within_session(bar: Bar, session_start: time, session_end: time) -> bool:
     bar_time = bar.timestamp.time()
-    return session_start <= bar_time <= session_end
+    return session_start <= bar_time < session_end
 
 
 def compute_volume_profile(bars: List[Bar], tick_size: float) -> Tuple[Dict[float, float], float]:

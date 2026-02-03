@@ -118,12 +118,12 @@ def compute_day_metrics(
     opening_window_minutes: int,
 ) -> Optional[DayMetrics]:
     rth_bars = [
-        bar for bar in bars if rth_start <= bar.timestamp.time() <= rth_end
+        bar for bar in bars if rth_start <= bar.timestamp.time() < rth_end
     ]
     if not rth_bars:
         return None
 
-    ib_bars = [bar for bar in rth_bars if ib_start <= bar.timestamp.time() <= ib_end]
+    ib_bars = [bar for bar in rth_bars if ib_start <= bar.timestamp.time() < ib_end]
     if not ib_bars:
         return None
 
@@ -140,7 +140,7 @@ def compute_day_metrics(
     rth_low = min(bar.low for bar in rth_bars)
     rth_close = rth_bars[-1].close
 
-    after_ib = [bar for bar in rth_bars if bar.timestamp.time() > ib_end]
+    after_ib = [bar for bar in rth_bars if bar.timestamp.time() >= ib_end]
     touched_high = any(bar.high >= ib_high for bar in after_ib)
     touched_low = any(bar.low <= ib_low for bar in after_ib)
     rotation = touched_high and touched_low
