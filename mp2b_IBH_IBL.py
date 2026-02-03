@@ -11,8 +11,9 @@ import argparse
 import csv
 import sys
 from dataclasses import dataclass
-from datetime import datetime, date, time, timedelta
+from datetime import datetime, date, time, timedelta, timezone
 from typing import Iterable, Iterator, List, Optional
+from zoneinfo import ZoneInfo
 
 
 DATE_FORMAT = "%m/%d/%y %H:%M"
@@ -92,15 +93,23 @@ def parse_date(value: str) -> date:
 
 
 def iter_bars(csv_path: str) -> Iterator[Bar]:
+    # CSV timestamps are in fixed PST (UTC-8).  Convert to
+    # America/Los_Angeles so DST dates shift by +1 h and the
+    # RTH/IB windows stay aligned with the real CME session.
+    pst = timezone(timedelta(hours=-8))
+    local_tz = ZoneInfo("America/Los_Angeles")
+
     with open(csv_path, newline="") as handle:
         reader = csv.DictReader(handle)
         for row in reader:
             raw_dt = row.get("DateTime") or row.get("\ufeffDateTime")
             if not raw_dt:
                 continue
-            timestamp = datetime.strptime(raw_dt.strip(), DATE_FORMAT)
+            naive_ts = datetime.strptime(raw_dt.strip(), DATE_FORMAT)
+            aware_ts = naive_ts.replace(tzinfo=pst)
+            local_ts = aware_ts.astimezone(local_tz).replace(tzinfo=None)
             yield Bar(
-                timestamp=timestamp,
+                timestamp=local_ts,
                 open=float(row["Open"]),
                 high=float(row["High"]),
                 low=float(row["Low"]),
@@ -118,12 +127,12 @@ def compute_day_metrics(
     opening_window_minutes: int,
 ) -> Optional[DayMetrics]:
     rth_bars = [
-        bar for bar in bars if rth_start <= bar.timestamp.time() <= rth_end
+        bar for bar in bars if rth_start <= bar.timestamp.time() < rth_end
     ]
     if not rth_bars:
         return None
 
-    ib_bars = [bar for bar in rth_bars if ib_start <= bar.timestamp.time() <= ib_end]
+    ib_bars = [bar for bar in rth_bars if ib_start <= bar.timestamp.time() < ib_end]
     if not ib_bars:
         return None
 
@@ -140,7 +149,7 @@ def compute_day_metrics(
     rth_low = min(bar.low for bar in rth_bars)
     rth_close = rth_bars[-1].close
 
-    after_ib = [bar for bar in rth_bars if bar.timestamp.time() > ib_end]
+    after_ib = [bar for bar in rth_bars if bar.timestamp.time() >= ib_end]
     touched_high = any(bar.high >= ib_high for bar in after_ib)
     touched_low = any(bar.low <= ib_low for bar in after_ib)
     rotation = touched_high and touched_low

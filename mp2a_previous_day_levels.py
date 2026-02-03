@@ -11,8 +11,9 @@ from __future__ import annotations
 import argparse
 import csv
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Dict, Iterable, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 DATE_FORMAT = "%m/%d/%y %H:%M"
 
@@ -77,15 +78,23 @@ def parse_float(value: Optional[str]) -> Optional[float]:
 
 
 def iter_bars(csv_path: str) -> Iterable[Bar]:
+    # CSV timestamps are in fixed PST (UTC-8).  Convert to
+    # America/Los_Angeles so DST dates shift by +1 h and the
+    # RTH/IB windows stay aligned with the real CME session.
+    pst = timezone(timedelta(hours=-8))
+    local_tz = ZoneInfo("America/Los_Angeles")
+
     with open(csv_path, newline="") as handle:
         reader = csv.DictReader(handle)
         for row in reader:
             raw_dt = row.get("DateTime") or row.get("\ufeffDateTime")
             if not raw_dt:
                 continue
-            timestamp = datetime.strptime(raw_dt.strip(), DATE_FORMAT)
+            naive_ts = datetime.strptime(raw_dt.strip(), DATE_FORMAT)
+            aware_ts = naive_ts.replace(tzinfo=pst)
+            local_ts = aware_ts.astimezone(local_tz).replace(tzinfo=None)
             yield Bar(
-                timestamp=timestamp,
+                timestamp=local_ts,
                 open=float(row["Open"]),
                 high=float(row["High"]),
                 low=float(row["Low"]),
@@ -96,7 +105,7 @@ def iter_bars(csv_path: str) -> Iterable[Bar]:
 
 def within_session(bar: Bar, session_start: time, session_end: time) -> bool:
     bar_time = bar.timestamp.time()
-    return session_start <= bar_time <= session_end
+    return session_start <= bar_time < session_end
 
 
 def compute_volume_profile(bars: List[Bar], tick_size: float) -> Tuple[Dict[float, float], float]:

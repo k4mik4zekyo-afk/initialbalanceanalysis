@@ -17,11 +17,15 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
+import pickle
 import sys
 from dataclasses import dataclass
-from datetime import datetime, date, time, timedelta
+from datetime import datetime, date, time, timedelta, timezone
 from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 from zoneinfo import ZoneInfo
+
+import numpy as np
 
 
 DATE_FORMAT = "%m/%d/%y %H:%M"
@@ -116,13 +120,20 @@ def iter_bars(csv_path: str, tz_name: str = "America/Los_Angeles") -> Iterator[B
                     volume=float(row.get("Volume", 0) or 0),
                 )
         else:
+            # CSV timestamps are in fixed PST (UTC-8).  Convert to
+            # America/Los_Angeles so DST dates shift by +1 h and the
+            # RTH/IB windows stay aligned with the real CME session.
+            pst = timezone(timedelta(hours=-8))
+            local_tz = ZoneInfo(tz_name)
             for row in reader:
                 raw_dt = row.get("DateTime") or row.get("\ufeffDateTime")
                 if not raw_dt:
                     continue
-                timestamp = datetime.strptime(raw_dt.strip(), DATE_FORMAT)
+                naive_ts = datetime.strptime(raw_dt.strip(), DATE_FORMAT)
+                aware_ts = naive_ts.replace(tzinfo=pst)
+                local_ts = aware_ts.astimezone(local_tz).replace(tzinfo=None)
                 yield Bar(
-                    timestamp=timestamp,
+                    timestamp=local_ts,
                     open=float(row["Open"]),
                     high=float(row["High"]),
                     low=float(row["Low"]),
@@ -221,13 +232,13 @@ def compute_ib_features(
 ) -> Optional[Dict[str, Optional[float]]]:
     """Compute the Phase I features needed for the feature vector."""
     rth_bars = [
-        bar for bar in bars if rth_start <= bar.timestamp.time() <= rth_end
+        bar for bar in bars if rth_start <= bar.timestamp.time() < rth_end
     ]
     if not rth_bars:
         return None
 
     ib_bars = [
-        bar for bar in rth_bars if ib_start <= bar.timestamp.time() <= ib_end
+        bar for bar in rth_bars if ib_start <= bar.timestamp.time() < ib_end
     ]
     if not ib_bars:
         return None
@@ -339,7 +350,7 @@ def compute_prior_session(
     """Compute prior-day levels and session volume from the previous session bars."""
     session_bars = [
         bar for bar in bars
-        if session_start <= bar.timestamp.time() <= session_end
+        if session_start <= bar.timestamp.time() < session_end
     ]
     if not session_bars:
         return None
@@ -511,7 +522,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional output file path. Writes JSON. Omit to print to stdout.",
     )
+    parser.add_argument(
+        "--model",
+        default="decision_tree_model.pkl",
+        help="Path to the trained decision tree model pickle file.",
+    )
+    parser.add_argument(
+        "--log-file",
+        default=None,
+        help="Optional log file path. Writes full output to this file.",
+    )
     return parser
+
+
+def _output(text: str, log_handle=None) -> None:
+    """Print to stdout and optionally write to a log file."""
+    print(text)
+    if log_handle is not None:
+        log_handle.write(text + "\n")
 
 
 def main() -> None:
@@ -531,60 +559,131 @@ def main() -> None:
     if not 0 < args.value_area_pct <= 1:
         raise SystemExit("Value area percent must be between 0 and 1.")
 
-    if args.target_date is not None:
-        prev_bars, target_bars = collect_two_sessions(
-            iter_bars(args.csv, tz_name=args.tz), args.target_date
+    # Open log file if requested
+    log_handle = None
+    if args.log_file:
+        log_handle = open(args.log_file, "w")
+
+    try:
+        _output("=" * 60, log_handle)
+        _output("  Decision Tree Feature Extraction & Prediction", log_handle)
+        _output("=" * 60, log_handle)
+
+        # --- Load model ---
+        if not os.path.isfile(args.model):
+            raise SystemExit(f"Model file not found: {args.model}")
+        with open(args.model, "rb") as f:
+            model = pickle.load(f)
+        _output(f"\nModel loaded: {args.model}", log_handle)
+
+        # --- Collect bars ---
+        if args.target_date is not None:
+            prev_bars, target_bars = collect_two_sessions(
+                iter_bars(args.csv, tz_name=args.tz), args.target_date
+            )
+        else:
+            prev_bars, target_bars = collect_last_two_sessions(
+                iter_bars(args.csv, tz_name=args.tz), args.rth_start, args.rth_end
+            )
+
+        if not target_bars:
+            raise SystemExit(
+                "No bars found"
+                + (f" for target date {args.target_date}." if args.target_date else
+                   " in the CSV.")
+            )
+        if not prev_bars:
+            print(
+                "Warning: no prior session bars found; prev_session_volume and "
+                "normalized_distance will be None.",
+                file=sys.stderr,
+            )
+
+        target_session_date = target_bars[0].timestamp.date()
+        _output(f"Target session date: {target_session_date}", log_handle)
+
+        # --- Build features ---
+        features = build_feature_vector(
+            prev_bars,
+            target_bars,
+            rth_start=args.rth_start,
+            rth_end=args.rth_end,
+            ib_start=args.ib_start,
+            ib_end=args.ib_end,
+            session_start=args.session_start,
+            session_end=args.session_end,
+            tick_size=args.tick_size,
+            value_area_pct=args.value_area_pct,
         )
-    else:
-        prev_bars, target_bars = collect_last_two_sessions(
-            iter_bars(args.csv, tz_name=args.tz), args.rth_start, args.rth_end
-        )
 
-    if not target_bars:
-        raise SystemExit(
-            "No bars found"
-            + (f" for target date {args.target_date}." if args.target_date else
-               " in the CSV.")
-        )
-    if not prev_bars:
-        print(
-            f"Warning: no prior session bars found; prev_session_volume and "
-            f"normalized_distance will be None.",
-            file=sys.stderr,
-        )
+        if features is None:
+            raise SystemExit(
+                f"Could not compute features for {args.target_date} "
+                f"(missing RTH or IB bars)."
+            )
 
-    features = build_feature_vector(
-        prev_bars,
-        target_bars,
-        rth_start=args.rth_start,
-        rth_end=args.rth_end,
-        ib_start=args.ib_start,
-        ib_end=args.ib_end,
-        session_start=args.session_start,
-        session_end=args.session_end,
-        tick_size=args.tick_size,
-        value_area_pct=args.value_area_pct,
-    )
+        # --- Check for None inputs ---
+        _output("\nFeatures:", log_handle)
+        has_none = False
+        for name, value in zip(FEATURE_NAMES, features):
+            _output(f"  {name}: {value}", log_handle)
+            if value is None:
+                has_none = True
 
-    if features is None:
-        raise SystemExit(
-            f"Could not compute features for {args.target_date} "
-            f"(missing RTH or IB bars)."
-        )
+        if has_none:
+            _output("\nNone as input", log_handle)
+            _output("Cannot run prediction with missing feature values.", log_handle)
+            if args.output:
+                result = {
+                    "feature_names": FEATURE_NAMES,
+                    "features": [features],
+                    "error": "None as input",
+                }
+                with open(args.output, "w") as handle:
+                    handle.write(json.dumps(result, indent=2) + "\n")
+            raise SystemExit(1)
 
-    result = {
-        "feature_names": FEATURE_NAMES,
-        "features": [features],
-    }
+        # --- Predict ---
+        import pandas as pd
 
-    payload = json.dumps(result, indent=2)
+        feature_df = pd.DataFrame([features], columns=FEATURE_NAMES)
+        prediction = model.predict(feature_df)[0]
+        probabilities = model.predict_proba(feature_df)[0]
+        class_labels = model.classes_
 
-    if args.output:
-        with open(args.output, "w") as handle:
-            handle.write(payload + "\n")
-        print(f"Saved features to {args.output}")
-    else:
-        print(payload)
+        label = "Rotation" if prediction else "No Rotation"
+        _output(f"\n{'=' * 60}", log_handle)
+        _output(f"  Prediction: {label}", log_handle)
+        _output(f"{'=' * 60}", log_handle)
+        _output(f"\n  Probabilities:", log_handle)
+        for cls, prob in zip(class_labels, probabilities):
+            cls_label = "Rotation" if cls else "No Rotation"
+            _output(f"    {cls_label}: {prob:.4f}", log_handle)
+
+        # --- Build result ---
+        result = {
+            "feature_names": FEATURE_NAMES,
+            "features": [features],
+            "prediction": label,
+            "prediction_raw": bool(prediction),
+            "probabilities": {
+                "Rotation": float(probabilities[list(class_labels).index(True)]),
+                "No Rotation": float(probabilities[list(class_labels).index(False)]),
+            },
+        }
+
+        payload = json.dumps(result, indent=2)
+        _output(f"\nJSON output:\n{payload}", log_handle)
+
+        if args.output:
+            with open(args.output, "w") as handle:
+                handle.write(payload + "\n")
+            _output(f"\nSaved features + prediction to {args.output}", log_handle)
+
+    finally:
+        if log_handle is not None:
+            log_handle.close()
+            print(f"Log written to {args.log_file}")
 
 
 if __name__ == "__main__":
