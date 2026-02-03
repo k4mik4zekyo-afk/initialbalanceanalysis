@@ -21,7 +21,7 @@ import os
 import pickle
 import sys
 from dataclasses import dataclass
-from datetime import datetime, date, time, timedelta
+from datetime import datetime, date, time, timedelta, timezone
 from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -120,13 +120,20 @@ def iter_bars(csv_path: str, tz_name: str = "America/Los_Angeles") -> Iterator[B
                     volume=float(row.get("Volume", 0) or 0),
                 )
         else:
+            # CSV timestamps are in fixed PST (UTC-8).  Convert to
+            # America/Los_Angeles so DST dates shift by +1 h and the
+            # RTH/IB windows stay aligned with the real CME session.
+            pst = timezone(timedelta(hours=-8))
+            local_tz = ZoneInfo(tz_name)
             for row in reader:
                 raw_dt = row.get("DateTime") or row.get("\ufeffDateTime")
                 if not raw_dt:
                     continue
-                timestamp = datetime.strptime(raw_dt.strip(), DATE_FORMAT)
+                naive_ts = datetime.strptime(raw_dt.strip(), DATE_FORMAT)
+                aware_ts = naive_ts.replace(tzinfo=pst)
+                local_ts = aware_ts.astimezone(local_tz).replace(tzinfo=None)
                 yield Bar(
-                    timestamp=timestamp,
+                    timestamp=local_ts,
                     open=float(row["Open"]),
                     high=float(row["High"]),
                     low=float(row["Low"]),

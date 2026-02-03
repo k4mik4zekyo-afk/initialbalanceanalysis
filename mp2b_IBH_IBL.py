@@ -11,8 +11,9 @@ import argparse
 import csv
 import sys
 from dataclasses import dataclass
-from datetime import datetime, date, time, timedelta
+from datetime import datetime, date, time, timedelta, timezone
 from typing import Iterable, Iterator, List, Optional
+from zoneinfo import ZoneInfo
 
 
 DATE_FORMAT = "%m/%d/%y %H:%M"
@@ -92,15 +93,23 @@ def parse_date(value: str) -> date:
 
 
 def iter_bars(csv_path: str) -> Iterator[Bar]:
+    # CSV timestamps are in fixed PST (UTC-8).  Convert to
+    # America/Los_Angeles so DST dates shift by +1 h and the
+    # RTH/IB windows stay aligned with the real CME session.
+    pst = timezone(timedelta(hours=-8))
+    local_tz = ZoneInfo("America/Los_Angeles")
+
     with open(csv_path, newline="") as handle:
         reader = csv.DictReader(handle)
         for row in reader:
             raw_dt = row.get("DateTime") or row.get("\ufeffDateTime")
             if not raw_dt:
                 continue
-            timestamp = datetime.strptime(raw_dt.strip(), DATE_FORMAT)
+            naive_ts = datetime.strptime(raw_dt.strip(), DATE_FORMAT)
+            aware_ts = naive_ts.replace(tzinfo=pst)
+            local_ts = aware_ts.astimezone(local_tz).replace(tzinfo=None)
             yield Bar(
-                timestamp=timestamp,
+                timestamp=local_ts,
                 open=float(row["Open"]),
                 high=float(row["High"]),
                 low=float(row["Low"]),
