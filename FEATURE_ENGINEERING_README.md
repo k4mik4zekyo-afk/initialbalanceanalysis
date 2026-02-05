@@ -26,8 +26,9 @@ This implementation creates a comprehensive Jupyter notebook for evaluating the 
 
 ### New Features (Expanded)
 6. `nearest_prior_level_to_open_distance` - Raw distance to nearest prior level
-7. `norm_opening_volatility` - ATR(14) at 6:45am / avg RTH ATR(14) over prev 5 days
-8. `news_event_during_RTH` - Binary: 1 if medium/high impact USD news during RTH, else 0
+7. `nearest_prior_level_to_open` (categorical) - Which level is nearest: pdh, pdl, vah, val, or poc (one-hot encoded)
+8. `norm_opening_volatility` - ATR(14) at 6:45am / avg of 6:45am ATR(14) over prev 5 days
+9. `news_event_during_RTH` - Binary: 1 if medium/high impact USD news during RTH, else 0
 
 ## Feature Engineering Details
 
@@ -44,9 +45,15 @@ This implementation creates a comprehensive Jupyter notebook for evaluating the 
 - **Numerator:** 1-minute ATR(14) at 6:45am PST
   - ATR = Exponential Moving Average of True Range over 14 periods
   - True Range = max(High-Low, |High-PrevClose|, |Low-PrevClose|)
-- **Denominator:** Average ATR(14) across all RTH minutes for previous 5 trading days
+- **Denominator:** Average of 6:45am ATR(14) readings from previous 5 trading days
 - **Calculation:** Vectorized pandas operations (0.18s for 349k bars)
 - **No future leakage:** Only uses bars up to 6:45am and previous 5 days
+
+### Categorical Feature: Nearest Prior Level
+- **Source:** `nearest_prior_level_to_open` column in phase2 data
+- **Values:** pdh, pdl, vah, val, poc (which prior level is closest to opening)
+- **Encoding:** One-hot encoded into 5 binary features
+- **Feature Importance:** Random Forest analysis shows relative importance of each level
 
 ### Normalized Distance
 - **Formula:** `nearest_prior_level_distance / (prev_pdh - prev_pdl)`
@@ -55,17 +62,18 @@ This implementation creates a comprehensive Jupyter notebook for evaluating the 
 
 ## Models Evaluated
 
-Three tree-based classifiers:
+Tree-based classifiers:
 1. **Decision Tree** (max_depth=5, class_weight='balanced')
 2. **Random Forest** (100 estimators, max_depth=5, class_weight='balanced')
-3. **XGBClassifier** (100 estimators, max_depth=5, scale_pos_weight for imbalance)
+3. **XGBClassifier** (optional - only if XGBoost is installed)
 
 ## Evaluation Methodology
 
 - **Cross-Validation:** Stratified 5-fold
 - **Metrics:** F1 Score, Precision, Recall
 - **Class Imbalance:** Handled via `class_weight='balanced'` or `scale_pos_weight`
-- **Comparison:** Baseline (5 features) vs Expanded (8 features)
+- **Comparison:** Baseline (5 features) vs Expanded (12+ features with categorical encoding)
+- **Feature Importance:** Random Forest feature importance ranking with categorical breakdown
 
 ## Error Analysis
 
@@ -77,11 +85,12 @@ For each model:
 
 ## Key Assumptions
 
-1. **Timezone:** All times in America/Los_Angeles (handles DST automatically)
-2. **RTH Window:** 6:30am - 1:00pm PST
+1. **Timezone:** All times in America/Los_Angeles (handles DST automatically - confirmed)
+2. **RTH Window:** 6:30am - 1:00pm PST (PST/PDT depending on DST)
 3. **Trading Days:** Only dates with RTH bars included
 4. **No Future Leakage:** All rolling averages use `.shift(1)` to use only past data
 5. **Missing Data:** Rows with any missing features are dropped (99.6% retention)
+6. **ATR Calculation:** Uses 6:45am readings specifically, not all RTH bars
 
 ## Performance Optimizations
 
