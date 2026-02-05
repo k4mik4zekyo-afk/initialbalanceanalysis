@@ -46,8 +46,8 @@ FEATURE_NAMES = [
     "relative_ib_volume",
     "normalized_distance",
     "opening_bar_open_close",
-    "opening_bar_volume",
-    "prev_session_volume",
+    "norm_opening_bar_volume",
+    "norm_prev_session_volume",
 ]
 
 
@@ -219,6 +219,34 @@ def collect_last_two_sessions(
     return by_date[valid_dates[-2]], by_date[valid_dates[-1]]
 
 
+def collect_n_sessions(
+    bars: Iterable[Bar],
+    n_sessions: int,
+    rth_start: time = DEFAULTS["rth_start"],
+    rth_end: time = DEFAULTS["rth_end"],
+) -> List[Tuple[date, List[Bar]]]:
+    """Return bars for the last N session dates in the file.
+
+    A date only counts as a valid session if it contains at least one bar
+    within the RTH window. Returns list of (date, bars) tuples sorted by date.
+    """
+    by_date: Dict[date, List[Bar]] = {}
+    for bar in bars:
+        by_date.setdefault(bar.timestamp.date(), []).append(bar)
+
+    # Keep only dates that have RTH-eligible bars
+    valid_dates = sorted(
+        d for d, day_bars in by_date.items()
+        if any(rth_start <= b.timestamp.time() <= rth_end for b in day_bars)
+    )
+    if not valid_dates:
+        return []
+
+    # Take the last N sessions
+    selected_dates = valid_dates[-n_sessions:]
+    return [(d, by_date[d]) for d in selected_dates]
+
+
 # ---------------------------------------------------------------------------
 # Phase I helpers (from mp2b_IBH_IBL.py algorithm)
 # ---------------------------------------------------------------------------
@@ -229,6 +257,7 @@ def compute_ib_features(
     rth_end: time,
     ib_start: time,
     ib_end: time,
+    opening_window_minutes: int = 15,
 ) -> Optional[Dict[str, Optional[float]]]:
     """Compute the Phase I features needed for the feature vector."""
     rth_bars = [
@@ -261,9 +290,9 @@ def compute_ib_features(
     )
     opening_bar_volume = opening_bar.volume if opening_bar else None
 
-    # Opening range midpoint (first 10 minutes, reuse mp2b logic)
+    # Opening range midpoint (reuse mp2b logic)
     opening_start_dt = datetime.combine(rth_bars[0].timestamp.date(), rth_start)
-    opening_end_dt = opening_start_dt + timedelta(minutes=10)
+    opening_end_dt = opening_start_dt + timedelta(minutes=opening_window_minutes)
     opening_window_bars = [
         bar for bar in rth_bars
         if opening_start_dt <= bar.timestamp < opening_end_dt
@@ -399,12 +428,13 @@ def build_feature_vector(
     session_end: time,
     tick_size: float,
     value_area_pct: float,
+    opening_window_minutes: int = 15,
 ) -> Optional[List[Optional[float]]]:
     """Build ``[relative_ib_volume, normalized_distance, opening_bar_open_close,
     opening_bar_volume, prev_session_volume]`` from two sessions of bars."""
 
     ib_feats = compute_ib_features(
-        target_bars, rth_start, rth_end, ib_start, ib_end
+        target_bars, rth_start, rth_end, ib_start, ib_end, opening_window_minutes
     )
     if ib_feats is None:
         return None
@@ -510,6 +540,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Value area percent for VAH/VAL (e.g. 0.7 for 70%%).",
     )
     parser.add_argument(
+        "--opening-window-minutes",
+        type=int,
+        default=10,
+        help="Opening range window length in minutes from RTH start (default: 10).",
+    )
+    parser.add_argument(
+        "--vol-norm-window",
+        type=int,
+        default=10,
+        help="Rolling window (in sessions) for volume normalization (default: 10).",
+    )
+    parser.add_argument(
         "--tz",
         default="America/Los_Angeles",
         help=(
@@ -576,22 +618,54 @@ def main() -> None:
             model = pickle.load(f)
         _output(f"\nModel loaded: {args.model}", log_handle)
 
-        # --- Collect bars ---
-        if args.target_date is not None:
-            prev_bars, target_bars = collect_two_sessions(
-                iter_bars(args.csv, tz_name=args.tz), args.target_date
-            )
-        else:
-            prev_bars, target_bars = collect_last_two_sessions(
-                iter_bars(args.csv, tz_name=args.tz), args.rth_start, args.rth_end
+        # --- Collect bars for multiple sessions (needed for volume normalization) ---
+        # We need vol_norm_window + 1 sessions: N for history + 1 for target
+        n_sessions_needed = args.vol_norm_window + 1
+        _output(f"\nLoading {n_sessions_needed} sessions for volume normalization...", log_handle)
+
+        sessions = collect_n_sessions(
+            iter_bars(args.csv, tz_name=args.tz),
+            n_sessions=n_sessions_needed,
+            rth_start=args.rth_start,
+            rth_end=args.rth_end,
+        )
+
+        if len(sessions) < 2:
+            raise SystemExit(
+                f"Need at least 2 sessions, found {len(sessions)}."
             )
 
-        if not target_bars:
-            raise SystemExit(
-                "No bars found"
-                + (f" for target date {args.target_date}." if args.target_date else
-                   " in the CSV.")
+        # Compute opening_bar_volume and session_volume for each session
+        session_metrics = []
+        for sess_date, sess_bars in sessions:
+            ib_feats = compute_ib_features(
+                sess_bars, args.rth_start, args.rth_end,
+                args.ib_start, args.ib_end, args.opening_window_minutes
             )
+            prior_sess = compute_prior_session(
+                sess_bars, args.session_start, args.session_end,
+                args.tick_size, args.value_area_pct
+            )
+            session_metrics.append({
+                "date": sess_date,
+                "bars": sess_bars,
+                "opening_bar_volume": ib_feats["opening_bar_volume"] if ib_feats else None,
+                "session_volume": prior_sess["session_volume"] if prior_sess else None,
+                "ib_feats": ib_feats,
+            })
+
+        # Target is the last session, prev is second-to-last
+        target_metrics = session_metrics[-1]
+        prev_metrics = session_metrics[-2]
+        target_bars = target_metrics["bars"]
+        prev_bars = prev_metrics["bars"]
+        target_session_date = target_metrics["date"]
+
+        _output(f"Target session date: {target_session_date}", log_handle)
+        _output(f"Sessions loaded: {len(sessions)}", log_handle)
+
+        if not target_bars:
+            raise SystemExit("No bars found for target session.")
         if not prev_bars:
             print(
                 "Warning: no prior session bars found; prev_session_volume and "
@@ -599,10 +673,28 @@ def main() -> None:
                 file=sys.stderr,
             )
 
-        target_session_date = target_bars[0].timestamp.date()
-        _output(f"Target session date: {target_session_date}", log_handle)
+        # --- Compute rolling averages (excluding target, only using past data) ---
+        history_metrics = session_metrics[:-1]  # All sessions except target
 
-        # --- Build features ---
+        # Get valid opening_bar_volumes from history
+        hist_opening_vols = [
+            m["opening_bar_volume"] for m in history_metrics
+            if m["opening_bar_volume"] is not None
+        ]
+        # Get valid session_volumes from history
+        hist_session_vols = [
+            m["session_volume"] for m in history_metrics
+            if m["session_volume"] is not None
+        ]
+
+        avg_opening_bar_volume = np.mean(hist_opening_vols) if hist_opening_vols else None
+        avg_session_volume = np.mean(hist_session_vols) if hist_session_vols else None
+
+        _output(f"\nVolume normalization (using {len(hist_opening_vols)} sessions):", log_handle)
+        _output(f"  avg_opening_bar_volume: {avg_opening_bar_volume:.2f}" if avg_opening_bar_volume else "  avg_opening_bar_volume: N/A", log_handle)
+        _output(f"  avg_session_volume: {avg_session_volume:.2f}" if avg_session_volume else "  avg_session_volume: N/A", log_handle)
+
+        # --- Build base features ---
         features = build_feature_vector(
             prev_bars,
             target_bars,
@@ -614,13 +706,35 @@ def main() -> None:
             session_end=args.session_end,
             tick_size=args.tick_size,
             value_area_pct=args.value_area_pct,
+            opening_window_minutes=args.opening_window_minutes,
         )
 
         if features is None:
             raise SystemExit(
-                f"Could not compute features for {args.target_date} "
+                f"Could not compute features for {target_session_date} "
                 f"(missing RTH or IB bars)."
             )
+
+        # --- Normalize volume features ---
+        # features[3] = opening_bar_volume, features[4] = prev_session_volume
+        raw_opening_bar_volume = features[3]
+        raw_prev_session_volume = features[4]
+
+        norm_opening_bar_volume = None
+        if raw_opening_bar_volume is not None and avg_opening_bar_volume:
+            norm_opening_bar_volume = raw_opening_bar_volume / avg_opening_bar_volume
+
+        norm_prev_session_volume = None
+        if raw_prev_session_volume is not None and avg_session_volume:
+            norm_prev_session_volume = raw_prev_session_volume / avg_session_volume
+
+        # Replace raw with normalized
+        features[3] = norm_opening_bar_volume
+        features[4] = norm_prev_session_volume
+
+        _output(f"\nRaw → Normalized:", log_handle)
+        _output(f"  opening_bar_volume: {raw_opening_bar_volume} → {norm_opening_bar_volume:.4f}" if norm_opening_bar_volume else f"  opening_bar_volume: {raw_opening_bar_volume} → N/A", log_handle)
+        _output(f"  prev_session_volume: {raw_prev_session_volume} → {norm_prev_session_volume:.4f}" if norm_prev_session_volume else f"  prev_session_volume: {raw_prev_session_volume} → N/A", log_handle)
 
         # --- Check for None inputs ---
         _output("\nFeatures:", log_handle)
