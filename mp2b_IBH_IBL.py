@@ -24,6 +24,7 @@ DEFAULTS = {
     "ib_start": time(6, 30),
     "ib_end": time(7, 30),
     "opening_window_minutes": 10,
+    "rotation_tolerance_pct": 10.0,
     "start_date": date(2025, 1, 15),
     "end_date": date(2026, 1, 15),
 }
@@ -125,6 +126,7 @@ def compute_day_metrics(
     ib_start: time,
     ib_end: time,
     opening_window_minutes: int,
+    rotation_tolerance_pct: float = 10.0,
 ) -> Optional[DayMetrics]:
     rth_bars = [
         bar for bar in bars if rth_start <= bar.timestamp.time() < rth_end
@@ -150,8 +152,9 @@ def compute_day_metrics(
     rth_close = rth_bars[-1].close
 
     after_ib = [bar for bar in rth_bars if bar.timestamp.time() >= ib_end]
-    touched_high = any(bar.high >= ib_high for bar in after_ib)
-    touched_low = any(bar.low <= ib_low for bar in after_ib)
+    tolerance_distance = ib_range * (rotation_tolerance_pct / 100)
+    touched_high = any(bar.high >= ib_high - tolerance_distance for bar in after_ib)
+    touched_low = any(bar.low <= ib_low + tolerance_distance for bar in after_ib)
     rotation = touched_high and touched_low
 
     breakside = "none"
@@ -417,6 +420,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Opening range window length in minutes from RTH start.",
     )
     parser.add_argument(
+        "--rotation-tolerance-pct",
+        type=float,
+        default=DEFAULTS["rotation_tolerance_pct"],
+        help="Rotation tolerance as percentage of IB range (default 10%%).",
+    )
+    parser.add_argument(
         "--start-date",
         type=parse_date,
         default=DEFAULTS["start_date"],
@@ -463,6 +472,7 @@ def main() -> None:
             args.ib_start,
             args.ib_end,
             args.opening_window_minutes,
+            args.rotation_tolerance_pct,
         )
         if day_metric:
             metrics.append(day_metric)

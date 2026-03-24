@@ -12,15 +12,36 @@ import argparse
 import csv
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
 DATE_FORMAT = "%m/%d/%y %H:%M"
+
+# Holiday adjustment map: Maps dates after holidays/incomplete sessions to their valid reference date
+# This ensures volume comparisons use complete trading days instead of partial/holiday sessions
+HOLIDAY_ADJUSTMENTS = {
+    date(2025, 12, 1): date(2025, 11, 26),   # Thanksgiving (Nov 27) -> skip Thursday and Friday (still open) due to low volume
+    date(2025, 9, 2): date(2025, 8, 29),   # Labor Day (Sept 1) -> use Friday Aug 29
+    date(2025, 7, 7): date(2025, 7, 2),   # July 4th holiday meant that July 3rd was a short day - mainly for volume purposes
+    date(2025, 6, 20): date(2025, 6, 18),  # June 19 (Juneteenth) -> use Wednesday June 18
+    date(2025, 5, 27): date(2025, 5, 23),  # May 26 (Memorial Day) -> use Friday May 23
+    date(2025, 2, 18): date(2025, 2, 14),  # Presidents Day (Feb 17) -> use Friday Feb 14
+    date(2025, 1, 21): date(2025, 1, 17),  # Martin Luther King Jr. Day (Jan 20) -> use Friday Jan 17
+    #Technically Oct 20 is low volume and Diwali, but I am not filtering this out.
+    
+    #adding contract switches too since these are low volume days
+    date(2025, 12, 16): date(2025, 12, 12),   # Q4 contract switch on 12/15
+    date(2025, 9, 16): date(2025, 9, 12),   # Q3 contract switch on 9/15
+    #date(2025, 6, 16): date(2025, 6, 15),   # Q3 contract switch on 6/15
+        #Interesting the day of roll over had a lot of volume but the following day had low volume
+    date(2025, 3, 18): date(2025, 3, 14),   # Q3 contract switch on 3/17
+}
 
 DEFAULTS = {
     "csv": "MNQ_1min_2023Jan_2026Jan.csv",
     "ib_metrics": "outputs/ib_metrics.csv",
     "output": "outputs/phase2_previous_day_levels.csv",
+    "events": "Jan01_2025_December31_2025_events.csv",
     "session_start": time(6, 30),
     "session_end": time(14, 0),
     "tick_size": 0.25,
@@ -254,13 +275,73 @@ def load_ib_metrics(path: str) -> List[Dict[str, str]]:
         return list(reader)
 
 
+def load_high_impact_events(
+    path: str, session_start: time, session_end: time
+) -> Set[date]:
+    """Load dates with high impact events during RTH (Regular Trading Hours)."""
+    high_impact_dates = set()
+    try:
+        with open(path, newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                impact = row.get("Impact", "")
+                if "High Impact" not in impact:
+                    continue
+                
+                datetime_str = row.get("DateTime", "")
+                if not datetime_str:
+                    continue
+                
+                try:
+                    # Parse ISO format with timezone
+                    event_dt = datetime.fromisoformat(datetime_str)
+                    event_time = event_dt.time()
+                    event_date = event_dt.date()
+                    
+                    # Check if event occurs during RTH
+                    if session_start <= event_time <= session_end:
+                        high_impact_dates.add(event_date)
+                except (ValueError, AttributeError):
+                    continue
+    except FileNotFoundError:
+        print(f"Warning: Events file '{path}' not found. High impact column will be False.")
+    
+    return high_impact_dates
+
+
+def get_adjusted_prior_date(current_date: date, levels_by_date: Dict[date, PriorDayLevels]) -> Optional[date]:
+    """
+    Get the appropriate reference date for volume comparisons.
+    If current_date follows a holiday/incomplete session, use the adjusted date from HOLIDAY_ADJUSTMENTS.
+    Otherwise, return the immediate prior trading date.
+    """
+    # Check if we have a manual holiday adjustment
+    if current_date in HOLIDAY_ADJUSTMENTS:
+        adjusted_date = HOLIDAY_ADJUSTMENTS[current_date]
+        if adjusted_date in levels_by_date:
+            return adjusted_date
+    
+    # Otherwise, find the immediate prior trading date
+    prior_dates = sorted([d for d in levels_by_date.keys() if d < current_date])
+    if prior_dates:
+        return prior_dates[-1]
+    
+    return None
+
+
 def build_prior_level_map(levels: List[PriorDayLevels]) -> Dict[date, PriorDayLevels]:
+    """
+    Build a map from session_date to the appropriate prior session levels.
+    Uses holiday adjustments to skip incomplete trading days.
+    """
+    levels_by_date = {level.session_date: level for level in levels}
     prior_map: Dict[date, PriorDayLevels] = {}
-    levels_sorted = sorted(levels, key=lambda level: level.session_date)
-    for idx, level in enumerate(levels_sorted):
-        if idx == 0:
-            continue
-        prior_map[level.session_date] = levels_sorted[idx - 1]
+    
+    for level in levels:
+        prior_date = get_adjusted_prior_date(level.session_date, levels_by_date)
+        if prior_date:
+            prior_map[level.session_date] = levels_by_date[prior_date]
+    
     return prior_map
 
 
@@ -268,6 +349,7 @@ def add_interactions(
     ib_row: Dict[str, str],
     prior: Optional[PriorDayLevels],
     tolerance: float,
+    high_impact_dates: Set[date],
 ) -> Dict[str, object]:
     ib_high = parse_float(ib_row.get("ib_high"))
     ib_low = parse_float(ib_row.get("ib_low"))
@@ -291,13 +373,36 @@ def add_interactions(
         "poc": prior.poc if prior else None,
     }
 
+    # Calculate relative_ib_vol_pdv: current IB volume / previous session volume (no leakage)
+    ib_volume = parse_float(ib_row.get("ib_volume"))
+    prev_session_volume = prior.session_volume if prior else None
+    relative_ib_vol_pdv = (
+        ib_volume / prev_session_volume if ib_volume and prev_session_volume else None
+    )
+    
+    # Calculate relative_ib2_volume: current IB volume / previous IB volume
+    # The prev_ib_volume is passed in via the row (set in main loop)
+    prev_ib_volume = parse_float(ib_row.get("prev_ib_volume"))
+    relative_ib2_volume = (
+        ib_volume / prev_ib_volume if ib_volume and prev_ib_volume else None
+    )
+    
+    # Check if there's a high impact event during RTH on this session date
+    session_date_str = ib_row.get("session_date")
+    session_date = parse_date(session_date_str) if session_date_str else None
+    high_impact_during_rth = session_date in high_impact_dates if session_date else False
+
     updates: Dict[str, object] = {
         "prev_pdh": prior_levels["pdh"],
         "prev_pdl": prior_levels["pdl"],
         "prev_vah": prior_levels["vah"],
         "prev_val": prior_levels["val"],
         "prev_poc": prior_levels["poc"],
-        "prev_session_volume": prior.session_volume if prior else None,
+        "prev_session_volume": prev_session_volume,
+        "prev_ib_volume": prev_ib_volume,  # Already set in row by main loop
+        "relative_ib_vol_pdv": relative_ib_vol_pdv,
+        "relative_ib2_volume": relative_ib2_volume,
+        "high_impact_during_rth": high_impact_during_rth,
         "opening_range_midpoint": opening_midpoint,
     }
 
@@ -370,6 +475,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--ib-metrics",
         default=DEFAULTS["ib_metrics"],
         help="Path to Phase I IB metrics CSV (from mp2b_IBH_IBL.py).",
+    )
+    parser.add_argument(
+        "--events",
+        default=DEFAULTS["events"],
+        help="Path to events CSV file with high impact economic data releases.",
     )
     parser.add_argument(
         "--output",
@@ -445,6 +555,11 @@ def main() -> None:
     if not ib_rows:
         raise SystemExit("IB metrics file is empty.")
 
+    # Load high impact events
+    high_impact_dates = load_high_impact_events(
+        args.events, args.session_start, args.session_end
+    )
+    
     fieldnames = list(ib_rows[0].keys())
     extra_fields = [
         "prev_pdh",
@@ -453,6 +568,10 @@ def main() -> None:
         "prev_val",
         "prev_poc",
         "prev_session_volume",
+        "prev_ib_volume",
+        "relative_ib_vol_pdv",
+        "relative_ib2_volume",
+        "high_impact_during_rth",
         "opening_range_midpoint",
         "opening_touch_pdh",
         "opening_touch_pdl",
@@ -494,6 +613,16 @@ def main() -> None:
     ]
     fieldnames.extend([name for name in extra_fields if name not in fieldnames])
 
+    # Build IB volume lookup map for holiday-aware prev_ib_volume lookback
+    ib_volume_by_date: Dict[date, float] = {}
+    for row in ib_rows:
+        session_date_raw = row.get("session_date")
+        if session_date_raw:
+            session_date = parse_date(session_date_raw)
+            ib_vol = parse_float(row.get("ib_volume"))
+            if ib_vol is not None:
+                ib_volume_by_date[session_date] = ib_vol
+    
     with open(args.output, "w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
@@ -504,7 +633,16 @@ def main() -> None:
                 continue
             session_date = parse_date(session_date_raw)
             prior = prior_map.get(session_date)
-            updates = add_interactions(row, prior, args.level_tolerance)
+            
+            # Get prev_ib_volume using holiday-aware lookback
+            prev_ib_volume = None
+            adjusted_prior_date = get_adjusted_prior_date(session_date, {d: None for d in ib_volume_by_date.keys()})
+            if adjusted_prior_date and adjusted_prior_date in ib_volume_by_date:
+                prev_ib_volume = ib_volume_by_date[adjusted_prior_date]
+            
+            row["prev_ib_volume"] = str(prev_ib_volume) if prev_ib_volume is not None else ""
+            
+            updates = add_interactions(row, prior, args.level_tolerance, high_impact_dates)
             row.update(updates)
             writer.writerow(row)
 

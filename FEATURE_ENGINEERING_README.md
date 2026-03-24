@@ -18,7 +18,7 @@ This implementation creates a comprehensive Jupyter notebook for evaluating the 
 ## Features
 
 ### Existing Features (Baseline)
-1. `relative_ib_volume` - IB volume as fraction of total RTH volume
+1. `relative_ib_vol_pdv` - IB volume divided by previous session's total RTH volume (avoids same-day data leakage)
 2. `normalized_distance` - Distance to nearest prior level / previous day range
 3. `opening_bar_open_close` - Opening bar price change
 4. `norm_opening_bar_volume` - Opening bar volume normalized by 10-day avg

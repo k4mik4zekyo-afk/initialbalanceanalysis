@@ -32,7 +32,7 @@ Computed from bars where `ib_start <= bar.time <= ib_end` (within RTH).
 Computed from all RTH bars where `rth_start <= bar.time <= rth_end`.
 
 - **total_volume**: Sum of `volume` over RTH bars.
-- **relative_ib_volume**: `ib_volume / total_volume` (0 if total volume is 0).
+- **relative_ib_vol_pdv**: `ib_volume / prev_session_volume` (None if prev_session_volume is None or 0). This measures how aggressive the current IB is relative to the previous day's total volume, avoiding same-day data leakage.
 - **rth_high**: Maximum `high` over RTH bars.
 - **rth_low**: Minimum `low` over RTH bars.
 - **rth_close**: `close` of the last RTH bar.

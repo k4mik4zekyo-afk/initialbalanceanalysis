@@ -3,10 +3,9 @@
 Decision-tree feature extraction from two consecutive sessions of 1-minute bars.
 
 Reuses the IB and prior-day level algorithms from mp2b_IBH_IBL.py and
-mp2a_previous_day_levels.py to compute a compact feature vector:
+mp2a_previous_day_levels.py to compute a compact 4-feature vector:
 
-    [[relative_ib_volume, normalized_distance, opening_bar_open_close,
-      opening_bar_volume, prev_session_volume]]
+    [[relative_ib_vol_pdv, normalized_distance, norm_distance_by_atr, nearest_level_pdh]]
 
 Intended for direct consumption by a sklearn-style decision tree via
 ``model.predict(features)``.
@@ -26,12 +25,13 @@ from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 import numpy as np
+import joblib
 
 
 DATE_FORMAT = "%m/%d/%y %H:%M"
 
 DEFAULTS = {
-    "csv": "MNQ_1min_2023Jan_2026Jan.csv",
+    "csv": "Feb9-CME_MINI_MNQ1!, 1_5cedc.csv",
     "rth_start": time(6, 30),
     "rth_end": time(13, 0),
     "ib_start": time(6, 30),
@@ -43,11 +43,10 @@ DEFAULTS = {
 }
 
 FEATURE_NAMES = [
-    "relative_ib_volume",
+    "relative_ib_vol_pdv",
     "normalized_distance",
-    "opening_bar_open_close",
-    "norm_opening_bar_volume",
-    "norm_prev_session_volume",
+    "norm_distance_by_atr",
+    "nearest_level_pdh",
 ]
 
 
@@ -278,6 +277,8 @@ def compute_ib_features(
 
     ib_volume = sum(bar.volume for bar in ib_bars)
     total_volume = sum(bar.volume for bar in rth_bars)
+    # NOTE: This calculation has data leakage! Use phase2 data instead where
+    # relative_ib_vol_pdv = ib_volume / prev_session_volume (no leakage)
     relative_ib_volume = ib_volume / total_volume if total_volume else 0.0
 
     # Opening bar (first RTH minute)
@@ -402,15 +403,19 @@ def compute_prior_session(
 def nearest_level_distance(
     opening_midpoint: Optional[float],
     prior_levels: Dict[str, Optional[float]],
-) -> Optional[float]:
-    """Absolute distance from the opening midpoint to the nearest prior level."""
+) -> Tuple[Optional[float], Optional[str]]:
+    """Return (distance, level_name) from the opening midpoint to the nearest prior level."""
     if opening_midpoint is None:
-        return None
-    distances = []
-    for value in prior_levels.values():
-        if value is not None:
-            distances.append(abs(opening_midpoint - value))
-    return min(distances) if distances else None
+        return None, None
+    min_distance = float('inf')
+    closest_level = None
+    for level_name, level_value in prior_levels.items():
+        if level_value is not None:
+            dist = abs(opening_midpoint - level_value)
+            if dist < min_distance:
+                min_distance = dist
+                closest_level = level_name
+    return (min_distance if closest_level else None, closest_level)
 
 
 # ---------------------------------------------------------------------------
@@ -429,9 +434,12 @@ def build_feature_vector(
     tick_size: float,
     value_area_pct: float,
     opening_window_minutes: int = 15,
-) -> Optional[List[Optional[float]]]:
-    """Build ``[relative_ib_volume, normalized_distance, opening_bar_open_close,
-    opening_bar_volume, prev_session_volume]`` from two sessions of bars."""
+) -> Optional[Tuple[List[Optional[float]], Dict]]:
+    """Build feature vector and return (features, metadata) dict.
+    
+    Features: [relative_ib_volume, normalized_distance, ATR, prior_levels dict]
+    Metadata includes closing_level_name for PDH one-hot encoding.
+    """
 
     ib_feats = compute_ib_features(
         target_bars, rth_start, rth_end, ib_start, ib_end, opening_window_minutes
@@ -443,28 +451,30 @@ def build_feature_vector(
         prev_bars, session_start, session_end, tick_size, value_area_pct
     )
 
-    prev_session_volume = prior["session_volume"] if prior else None
-
     # Normalized distance: nearest-prior-level distance / ib_range
     normalized_distance = None
+    closest_level_name = None
     if prior and ib_feats["opening_midpoint"] is not None:
         prior_levels = {
             k: prior[k] for k in ("pdh", "pdl", "vah", "val", "poc")
         }
-        raw_distance = nearest_level_distance(
+        raw_distance, closest_level_name = nearest_level_distance(
             ib_feats["opening_midpoint"], prior_levels
         )
         ib_range = ib_feats["ib_range"]
         if raw_distance is not None and ib_range and ib_range > 0:
             normalized_distance = raw_distance / ib_range
 
+    metadata = {
+        "ib_feats": ib_feats,
+        "prior": prior,
+        "closest_level_name": closest_level_name,
+    }
+
     return [
         ib_feats["relative_ib_volume"],
         normalized_distance,
-        ib_feats["opening_bar_open_close"],
-        ib_feats["opening_bar_volume"],
-        prev_session_volume,
-    ]
+    ], metadata
 
 
 # ---------------------------------------------------------------------------
@@ -566,8 +576,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--model",
-        default="decision_tree_model.pkl",
-        help="Path to the trained decision tree model pickle file.",
+        default="best_model.joblib",
+        help="Path to the trained decision tree model (joblib or pickle format).",
     )
     parser.add_argument(
         "--log-file",
@@ -614,8 +624,13 @@ def main() -> None:
         # --- Load model ---
         if not os.path.isfile(args.model):
             raise SystemExit(f"Model file not found: {args.model}")
-        with open(args.model, "rb") as f:
-            model = pickle.load(f)
+        
+        # Try to load as joblib first (recommended for sklearn models), then pickle
+        try:
+            model = joblib.load(args.model)
+        except Exception:
+            with open(args.model, "rb") as f:
+                model = pickle.load(f)
         _output(f"\nModel loaded: {args.model}", log_handle)
 
         # --- Collect bars for multiple sessions (needed for volume normalization) ---
@@ -695,7 +710,7 @@ def main() -> None:
         _output(f"  avg_session_volume: {avg_session_volume:.2f}" if avg_session_volume else "  avg_session_volume: N/A", log_handle)
 
         # --- Build base features ---
-        features = build_feature_vector(
+        result = build_feature_vector(
             prev_bars,
             target_bars,
             rth_start=args.rth_start,
@@ -709,37 +724,68 @@ def main() -> None:
             opening_window_minutes=args.opening_window_minutes,
         )
 
-        if features is None:
+        if result is None:
             raise SystemExit(
                 f"Could not compute features for {target_session_date} "
                 f"(missing RTH or IB bars)."
             )
 
-        # --- Normalize volume features ---
-        # features[3] = opening_bar_volume, features[4] = prev_session_volume
-        raw_opening_bar_volume = features[3]
-        raw_prev_session_volume = features[4]
+        features, metadata = result
+        ib_feats = metadata["ib_feats"]
+        prior = metadata["prior"]
+        closest_level_name = metadata["closest_level_name"]
 
-        norm_opening_bar_volume = None
-        if raw_opening_bar_volume is not None and avg_opening_bar_volume:
-            norm_opening_bar_volume = raw_opening_bar_volume / avg_opening_bar_volume
+        # --- Compute norm_distance_by_atr ---
+        # norm_distance_by_atr = normalized_distance / opening_atr
+        # ATR at 6:45am from target_bars
+        norm_distance_by_atr = None
+        opening_atr = None
+        
+        # Get RTH bars and compute ATR over last 14 bars
+        rth_bars_target = [
+            bar for bar in target_bars
+            if args.rth_start <= bar.timestamp.time() < args.rth_end
+        ]
+        if len(rth_bars_target) >= 14:
+            # Compute True Range for last 14 bars
+            tr_values = []
+            for i in range(len(rth_bars_target) - 14, len(rth_bars_target)):
+                bar = rth_bars_target[i]
+                if i == len(rth_bars_target) - 14:
+                    tr = bar.high - bar.low
+                else:
+                    prev_bar = rth_bars_target[i - 1]
+                    tr = max(
+                        bar.high - bar.low,
+                        abs(bar.high - prev_bar.close),
+                        abs(bar.low - prev_bar.close)
+                    )
+                tr_values.append(tr)
+            opening_atr = np.mean(tr_values)
+            
+            if features[1] is not None and opening_atr > 0:
+                norm_distance_by_atr = features[1] / opening_atr
+        
+        # --- Compute nearest_level_pdh (one-hot encoding) ---
+        nearest_level_pdh = 1 if closest_level_name == "pdh" else 0
+        
+        # Build final 4-feature array
+        final_features = [
+            features[0],  # relative_ib_vol_pdv
+            features[1],  # normalized_distance
+            norm_distance_by_atr,
+            nearest_level_pdh,
+        ]
 
-        norm_prev_session_volume = None
-        if raw_prev_session_volume is not None and avg_session_volume:
-            norm_prev_session_volume = raw_prev_session_volume / avg_session_volume
-
-        # Replace raw with normalized
-        features[3] = norm_opening_bar_volume
-        features[4] = norm_prev_session_volume
-
-        _output(f"\nRaw → Normalized:", log_handle)
-        _output(f"  opening_bar_volume: {raw_opening_bar_volume} → {norm_opening_bar_volume:.4f}" if norm_opening_bar_volume else f"  opening_bar_volume: {raw_opening_bar_volume} → N/A", log_handle)
-        _output(f"  prev_session_volume: {raw_prev_session_volume} → {norm_prev_session_volume:.4f}" if norm_prev_session_volume else f"  prev_session_volume: {raw_prev_session_volume} → N/A", log_handle)
+        _output(f"\nComputed Features:", log_handle)
+        _output(f"  opening_atr: {opening_atr:.4f}" if opening_atr else f"  opening_atr: N/A", log_handle)
+        _output(f"  norm_distance_by_atr: {norm_distance_by_atr:.4f}" if norm_distance_by_atr else f"  norm_distance_by_atr: N/A", log_handle)
+        _output(f"  nearest_level_pdh: {nearest_level_pdh} (closest: {closest_level_name})", log_handle)
 
         # --- Check for None inputs ---
-        _output("\nFeatures:", log_handle)
+        _output("\nFinal Features:", log_handle)
         has_none = False
-        for name, value in zip(FEATURE_NAMES, features):
+        for name, value in zip(FEATURE_NAMES, final_features):
             _output(f"  {name}: {value}", log_handle)
             if value is None:
                 has_none = True
@@ -750,7 +796,7 @@ def main() -> None:
             if args.output:
                 result = {
                     "feature_names": FEATURE_NAMES,
-                    "features": [features],
+                    "features": [final_features],
                     "error": "None as input",
                 }
                 with open(args.output, "w") as handle:
@@ -760,7 +806,7 @@ def main() -> None:
         # --- Predict ---
         import pandas as pd
 
-        feature_df = pd.DataFrame([features], columns=FEATURE_NAMES)
+        feature_df = pd.DataFrame([final_features], columns=FEATURE_NAMES)
         prediction = model.predict(feature_df)[0]
         probabilities = model.predict_proba(feature_df)[0]
         class_labels = model.classes_
@@ -777,7 +823,7 @@ def main() -> None:
         # --- Build result ---
         result = {
             "feature_names": FEATURE_NAMES,
-            "features": [features],
+            "features": [final_features],
             "prediction": label,
             "prediction_raw": bool(prediction),
             "probabilities": {
