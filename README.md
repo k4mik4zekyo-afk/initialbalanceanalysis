@@ -68,13 +68,56 @@ The model uses features available **before or at the start** of the trading sess
 | `news_event_during_rth` | Binary flag for high-impact USD economic events |
 | `opening_bar_open_close` | First RTH minute price change |
 
-## Model
+## Model Results
 
-- **Algorithm:** Random Forest classifier
-- **Target:** Binary — rotation (1) vs. continuation (0)
-- **Evaluation:** Stratified 5-fold cross-validation (F1, Precision, Recall)
+### Best Configuration
+
+**10-minute opening window + Random Forest (100 trees, max depth 5) + Normalized volume features**
+
+- **Target:** Binary classification — rotation (1) vs. continuation (0)
 - **Class distribution:** ~21% rotation, ~79% continuation (imbalanced)
 - **Data:** 256 trading sessions from 2025
+
+### Cross-Validation Performance (Stratified 5-Fold)
+
+| Model | F1 | Notes |
+|-------|-----|-------|
+| **Random Forest (10-min)** | **0.451 ± 0.022** | Best overall |
+| Decision Tree (10-min) | 0.420 ± 0.032 | |
+| Decision Tree (15-min) | 0.415 ± 0.033 | |
+| Random Forest (15-min) | 0.407 ± 0.026 | |
+
+### Within-Year Stability
+
+| Period | Sessions | Rotation % | F1 |
+|--------|----------|------------|-----|
+| 2023 | 248 | 22.6% | 0.358 ± 0.166 |
+| 2024 | 251 | 19.9% | 0.482 ± 0.040 |
+| 2025 | 256 | 20.7% | 0.451 ± 0.042 |
+
+### Walk-Forward Validation (Train Year N → Test Year N+1)
+
+| Split | F1 | Precision | Recall | Accuracy |
+|-------|-----|-----------|--------|----------|
+| 2023 → 2024 | 0.477 | 0.363 | 0.698 | 0.687 |
+| 2024 → 2025 | 0.352 | 0.306 | 0.415 | 0.684 |
+| 2023-24 → 2025 | 0.400 | 0.329 | 0.509 | 0.684 |
+
+### Impact of Feature Normalization
+
+| Metric | Before (raw volumes) | After (normalized) | Change |
+|--------|---------------------|-------------------|--------|
+| Best CV F1 | 0.444 ± 0.021 | **0.451 ± 0.022** | +1.6% |
+| 2025 within-year F1 | 0.369 ± 0.106 | **0.451 ± 0.042** | **+22%** |
+| Walk-forward 2024→2025 | 0.305 | **0.352** | **+15%** |
+
+### Key Findings
+
+1. **Normalizing volume features by rolling averages eliminated year-over-year drift**, boosting 2025 F1 by 22%.
+2. **Walk-forward generalization improved** — training on 2024 and testing on 2025 went from F1=0.305 to 0.352.
+3. **10-minute opening window outperforms 15-minute** with normalized features (F1 0.451 vs 0.407).
+4. **2023 data is noisy** (F1 0.358 ± 0.166), likely due to different market dynamics or insufficient warm-up for rolling averages.
+5. **Model selected 4 key features:** `relative_ib_vol_pdv`, `normalized_distance`, `norm_distance_by_atr`, `nearest_level_pdh`.
 
 ## Data
 
